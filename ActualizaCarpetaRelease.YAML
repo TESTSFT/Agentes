@@ -18,7 +18,6 @@ steps:
     # ============================================================
 
     $destinosSAR = @(
-        "\\SARTES022022\Release",
         "\\SARTES022019\Release",
         "\\SARDT4001\Release",
         "\\SARDT4000\Release",
