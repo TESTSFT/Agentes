@@ -6,33 +6,34 @@ pool:
 steps:
 - powershell: |
     # ============================================================
-    # RUTAS DE ORIGEN
+    # RUTA DE ORIGEN
     # ============================================================
 
     $origen = "\\apollo\TES\Actualizacion_release"
 
 
     # ============================================================
-    # SERVIDORES DESTINO POR VERSIÓN
+    # DESTINOS SAR
+    # Todos reciben el último SetupSAR_V2026.0.*
     # ============================================================
 
-    $destinos460 = @(
+    $destinosSAR = @(
         "\\SARTES022022\Release",
-        "\\SARTES022019\Release"
-    )
-
-    $destinos500 = @(
+        "\\SARTES022019\Release",
         "\\SARDT4001\Release",
         "\\SARDT4000\Release",
         "\\SARTES502022\Release",
         "\\SARTES042022\Release"
     )
 
-    $destinofi460 = @(
-        "\\SPETES0222\Release"
-    )
 
-    $destinofi500 = @(
+    # ============================================================
+    # DESTINOS OFISIS
+    # Todos reciben el último SetupOfisis_V2026.0.*
+    # ============================================================
+
+    $destinosOFISIS = @(
+        "\\SPETES0222\Release",
         "\\OFISIS502022\Release"
     )
 
@@ -40,6 +41,10 @@ steps:
     # ============================================================
     # VALIDAR EXISTENCIA DEL ORIGEN
     # ============================================================
+
+    Write-Host "=============================================="
+    Write-Host "VALIDANDO ORIGEN"
+    Write-Host "=============================================="
 
     if (-not (Test-Path $origen)) {
         Write-Error "La ruta de origen $origen no existe o no se puede acceder."
@@ -50,108 +55,65 @@ steps:
 
 
     # ============================================================
-    # OBTENER ARCHIVOS setupSAR
-    # ============================================================
-
-    $setups1 = @(
-        Get-ChildItem `
-            -Path $origen `
-            -Filter "setupSAR_*" `
-            -File
-    )
-
-    if ($setups1.Count -eq 0) {
-        Write-Error "No se encontraron archivos setupSAR_* en $origen."
-        exit 1
-    }
-
-    Write-Host "Archivos setupSAR encontrados: $($setups1.Count)"
-
-    foreach ($archivo in $setups1) {
-        Write-Host " - $($archivo.Name)"
-    }
-
-
-    # ============================================================
-    # OBTENER ARCHIVOS setupOFISIS
-    # ============================================================
-
-    $setups2 = @(
-        Get-ChildItem `
-            -Path $origen `
-            -Filter "setupOFISIS_*" `
-            -File
-    )
-
-    if ($setups2.Count -eq 0) {
-        Write-Error "No se encontraron archivos setupOFISIS_* en $origen."
-        exit 1
-    }
-
-    Write-Host "Archivos setupOFISIS encontrados: $($setups2.Count)"
-
-    foreach ($archivo in $setups2) {
-        Write-Host " - $($archivo.Name)"
-    }
-
-
-    # ============================================================
-    # INICIALIZAR VARIABLES
-    # ============================================================
-
-    $setup460    = $null
-    $setup500    = $null
-    $setupofi460 = $null
-    $setupofi500 = $null
-
-
-    # ============================================================
-    # DETECTAR VERSIONES SAR
-    # ============================================================
-
-    foreach ($archivo in $setups1) {
-
-        $nombre = $archivo.Name
-
-        if ($nombre -like "setupSAR_4.6.0*") {
-            $setup460 = $archivo.FullName
-        }
-        elseif ($nombre -like "setupSAR_5.0.0*") {
-            $setup500 = $archivo.FullName
-        }
-    }
-
-
-    # ============================================================
-    # DETECTAR VERSIONES OFISIS
-    # ============================================================
-
-    foreach ($archivo in $setups2) {
-
-        $nombre = $archivo.Name
-
-        if ($nombre -like "setupOFISIS_4.6.0*") {
-            $setupofi460 = $archivo.FullName
-        }
-        elseif ($nombre -like "setupOFISIS_5.0.0*") {
-            $setupofi500 = $archivo.FullName
-        }
-    }
-
-
-    # ============================================================
-    # MOSTRAR SETUPS DETECTADOS
+    # BUSCAR SetupSAR_V2026.0.*
     # ============================================================
 
     Write-Host ""
     Write-Host "=============================================="
-    Write-Host "SETUPS DETECTADOS"
+    Write-Host "BUSCANDO SETUP SAR 2026"
     Write-Host "=============================================="
 
-    Write-Host "SAR 4.6   : $setup460"
-    Write-Host "SAR 5.0   : $setup500"
-    Write-Host "OFISIS 4.6: $setupofi460"
-    Write-Host "OFISIS 5.0: $setupofi500"
+    $setupsSAR = @(
+        Get-ChildItem `
+            -Path $origen `
+            -Filter "SetupSAR_V2026.0.*.exe" `
+            -File `
+            -ErrorAction Stop
+    )
+
+    if ($setupsSAR.Count -eq 0) {
+        Write-Error "No se encontró ningún archivo SetupSAR_V2026.0.*.exe en $origen."
+        exit 1
+    }
+
+    $setupSAR = $setupsSAR |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+
+    Write-Host "Setup SAR seleccionado:"
+    Write-Host $setupSAR.FullName
+    Write-Host "Fecha modificación: $($setupSAR.LastWriteTime)"
+
+
+    # ============================================================
+    # BUSCAR SetupOfisis_V2026.0.*
+    # ============================================================
+
+    Write-Host ""
+    Write-Host "=============================================="
+    Write-Host "BUSCANDO SETUP OFISIS 2026"
+    Write-Host "=============================================="
+
+    $setupsOFISIS = @(
+        Get-ChildItem `
+            -Path $origen `
+            -Filter "SetupOfisis_V2026.0.*.exe" `
+            -File `
+            -ErrorAction Stop
+    )
+
+    if ($setupsOFISIS.Count -eq 0) {
+        Write-Error "No se encontró ningún archivo SetupOfisis_V2026.0.*.exe en $origen."
+        exit 1
+    }
+
+    $setupOFISIS = $setupsOFISIS |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+
+    Write-Host "Setup OFISIS seleccionado:"
+    Write-Host $setupOFISIS.FullName
+    Write-Host "Fecha modificación: $($setupOFISIS.LastWriteTime)"
 
 
     # ============================================================
@@ -193,158 +155,146 @@ steps:
 
 
     # ============================================================
-    # FUNCIÓN PARA COPIAR EL SETUP
+    # FUNCIÓN PARA COPIAR SETUP
     # ============================================================
 
     function Copiar-Setup {
 
         param(
             [string]$rutaDestino,
-            [string]$archivoSetup
+            [string]$archivoSetup,
+            [string]$tipoSetup
         )
 
-        if (Test-Path $rutaDestino) {
+        Write-Host ""
+        Write-Host "=============================================="
+        Write-Host "PROCESANDO DESTINO $tipoSetup"
+        Write-Host "=============================================="
+        Write-Host $rutaDestino
 
-            Write-Host ""
-            Write-Host "=============================================="
-            Write-Host "Procesando destino: $rutaDestino"
-            Write-Host "=============================================="
-
-            $limpiezaOK = Limpiar-Carpeta -ruta $rutaDestino
-
-            if (-not $limpiezaOK) {
-                Write-Warning "Se omite la copia porque no se pudo limpiar $rutaDestino."
-                return
-            }
-
-            try {
-
-                Copy-Item `
-                    -Path $archivoSetup `
-                    -Destination $rutaDestino `
-                    -Force `
-                    -ErrorAction Stop
-
-                Write-Host "Copiado:"
-                Write-Host "Origen : $archivoSetup"
-                Write-Host "Destino: $rutaDestino"
-            }
-            catch {
-
-                Write-Warning "No se pudo copiar el setup a $rutaDestino."
-                Write-Warning "Detalles del error: $($_.Exception.Message)"
-            }
-        }
-        else {
+        if (-not (Test-Path $rutaDestino)) {
 
             Write-Warning "No se encontró la ruta destino: $rutaDestino"
+
+            return $false
+        }
+
+        $limpiezaOK = Limpiar-Carpeta `
+            -ruta $rutaDestino
+
+        if (-not $limpiezaOK) {
+
+            Write-Warning "Se omite la copia porque no se pudo limpiar $rutaDestino."
+
+            return $false
+        }
+
+        try {
+
+            Copy-Item `
+                -Path $archivoSetup `
+                -Destination $rutaDestino `
+                -Force `
+                -ErrorAction Stop
+
+            $archivoCopiado = Join-Path `
+                -Path $rutaDestino `
+                -ChildPath ([System.IO.Path]::GetFileName($archivoSetup))
+
+            if (-not (Test-Path $archivoCopiado)) {
+                throw "El archivo no existe en destino luego de la copia."
+            }
+
+            Write-Host "$tipoSetup copiado correctamente."
+            Write-Host "Origen : $archivoSetup"
+            Write-Host "Destino: $archivoCopiado"
+
+            return $true
+        }
+        catch {
+
+            Write-Warning "No se pudo copiar $tipoSetup a $rutaDestino."
+            Write-Warning "Detalles del error: $($_.Exception.Message)"
+
+            return $false
         }
     }
 
 
     # ============================================================
-    # PROCESAR DESTINOS SAR 4.6
+    # COPIAR SETUP SAR A TODOS LOS DESTINOS SAR
     # ============================================================
 
     Write-Host ""
     Write-Host "=============================================="
-    Write-Host "PROCESANDO SAR 4.6"
+    Write-Host "COPIANDO SETUP SAR"
     Write-Host "=============================================="
 
-    if ($setup460) {
+    $errores = @()
 
-        foreach ($ruta in $destinos460) {
+    foreach ($ruta in $destinosSAR) {
 
-            Copiar-Setup `
-                -rutaDestino $ruta `
-                -archivoSetup $setup460
+        $ok = Copiar-Setup `
+            -rutaDestino $ruta `
+            -archivoSetup $setupSAR.FullName `
+            -tipoSetup "SAR"
+
+        if (-not $ok) {
+            $errores += "SAR -> $ruta"
         }
     }
-    else {
-
-        Write-Warning "No se encontró setup SAR 4.6."
-    }
 
 
     # ============================================================
-    # PROCESAR DESTINOS SAR 5.0
+    # COPIAR SETUP OFISIS A TODOS LOS DESTINOS OFISIS
     # ============================================================
 
     Write-Host ""
     Write-Host "=============================================="
-    Write-Host "PROCESANDO SAR 5.0"
+    Write-Host "COPIANDO SETUP OFISIS"
     Write-Host "=============================================="
 
-    if ($setup500) {
+    foreach ($ruta in $destinosOFISIS) {
 
-        foreach ($ruta in $destinos500) {
+        $ok = Copiar-Setup `
+            -rutaDestino $ruta `
+            -archivoSetup $setupOFISIS.FullName `
+            -tipoSetup "OFISIS"
 
-            Copiar-Setup `
-                -rutaDestino $ruta `
-                -archivoSetup $setup500
+        if (-not $ok) {
+            $errores += "OFISIS -> $ruta"
         }
     }
-    else {
-
-        Write-Warning "No se encontró setup SAR 5.0."
-    }
 
 
     # ============================================================
-    # PROCESAR DESTINO OFISIS 4.6
+    # RESULTADO FINAL
     # ============================================================
 
     Write-Host ""
     Write-Host "=============================================="
-    Write-Host "PROCESANDO OFISIS 4.6"
+    Write-Host "RESULTADO FINAL"
     Write-Host "=============================================="
 
-    if ($setupofi460) {
+    Write-Host "Setup SAR utilizado:"
+    Write-Host $setupSAR.FullName
+    Write-Host ""
 
-        foreach ($ruta in $destinofi460) {
+    Write-Host "Setup OFISIS utilizado:"
+    Write-Host $setupOFISIS.FullName
+    Write-Host ""
 
-            Copiar-Setup `
-                -rutaDestino $ruta `
-                -archivoSetup $setupofi460
+    if ($errores.Count -gt 0) {
+
+        Write-Error "La actualización falló en uno o más destinos:"
+
+        foreach ($rutaError in $errores) {
+            Write-Host " - $rutaError"
         }
-    }
-    else {
 
-        Write-Warning "No se encontró setup OFISIS 4.6."
+        exit 1
     }
 
+    Write-Host "Todos los destinos SAR y OFISIS fueron actualizados correctamente."
 
-    # ============================================================
-    # PROCESAR DESTINO OFISIS 5.0
-    # ============================================================
-
-    Write-Host ""
-    Write-Host "=============================================="
-    Write-Host "PROCESANDO OFISIS 5.0"
-    Write-Host "=============================================="
-
-    if ($setupofi500) {
-
-        foreach ($ruta in $destinofi500) {
-
-            Copiar-Setup `
-                -rutaDestino $ruta `
-                -archivoSetup $setupofi500
-        }
-    }
-    else {
-
-        Write-Warning "No se encontró setup OFISIS 5.0."
-    }
-
-
-    # ============================================================
-    # FINALIZACIÓN
-    # ============================================================
-
-    Write-Host ""
-    Write-Host "=============================================="
-    Write-Host "ACTUALIZACIÓN DE CARPETAS RELEASE FINALIZADA"
-    Write-Host "=============================================="
-
-  displayName: 'Actualizar carpetas Release'
+  displayName: 'Actualizar carpetas Release SAR y OFISIS 2026'
