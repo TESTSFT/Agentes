@@ -1,7 +1,3 @@
-trigger: none
-
-pool:
-  name: 'Softland-QA'
 
 steps:
 - powershell: |
