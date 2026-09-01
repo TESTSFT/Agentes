@@ -2,6 +2,8 @@ trigger: none
 
 pool:
   name: 'Softland-QA'
+  demands:
+  - Agent.OS -equals Windows_NT
 
 stages:
 
@@ -13,10 +15,12 @@ stages:
   displayName: '01 - Actualizar carpetas Release'
 
   jobs:
+
   - job: ActualizarRelease
     displayName: 'Actualizar Setup SAR y OFISIS'
 
     steps:
+
     - template: ActualizaCarpetaRelease.YAML
 
 
@@ -31,10 +35,12 @@ stages:
   condition: succeeded()
 
   jobs:
+
   - job: InstalarSetup
     displayName: 'Ejecutar Setup Softland'
 
     timeoutInMinutes: 90
 
     steps:
+
     - template: ejecuta.YAML
