@@ -1,0 +1,901 @@
+trigger: none
+
+pool:
+  name: 'Softland-QA'
+
+steps:
+- powershell: |
+    # ============================================================
+    # LIBRERÍAS
+    # ============================================================
+
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName UIAutomationClient
+    Add-Type -AssemblyName UIAutomationTypes
+
+
+    # ============================================================
+    # VALIDAR QUE EL AGENTE ESTÉ ELEVADO COMO ADMINISTRADOR
+    # ============================================================
+
+    Write-Host "=============================================="
+    Write-Host "VALIDANDO AGENTE SELF-HOSTED"
+    Write-Host "=============================================="
+    Write-Host "Equipo: $env:COMPUTERNAME"
+    Write-Host "Usuario: $env:USERNAME"
+    Write-Host "Session ID: $([System.Diagnostics.Process]::GetCurrentProcess().SessionId)"
+
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+
+    $esAdmin = $principal.IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator
+    )
+
+    Write-Host "Ejecutando elevado como Administrador: $esAdmin"
+
+    if (-not $esAdmin) {
+        throw "El Azure DevOps Agent no está ejecutando el pipeline como Administrador. Inicie run.cmd desde una consola elevada."
+    }
+
+
+    # ============================================================
+    # FUNCIONES NATIVAS DE WINDOWS
+    # ============================================================
+
+    Add-Type @"
+    using System;
+    using System.Text;
+    using System.Runtime.InteropServices;
+
+    public static class Win32 {
+        public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        public static extern bool EnumWindows(
+            EnumWindowsProc lpEnumFunc,
+            IntPtr lParam
+        );
+
+        [DllImport("user32.dll")]
+        public static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        public static extern bool IsWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        public static extern int GetWindowTextLength(IntPtr hWnd);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern int GetWindowText(
+            IntPtr hWnd,
+            StringBuilder lpString,
+            int nMaxCount
+        );
+
+        [DllImport("user32.dll")]
+        public static extern uint GetWindowThreadProcessId(
+            IntPtr hWnd,
+            out uint lpdwProcessId
+        );
+
+        [DllImport("user32.dll")]
+        public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+    }
+    "@
+
+
+    # ============================================================
+    # NORMALIZAR TEXTO DE CONTROLES
+    # "Sí" y "Si" se consideran equivalentes.
+    # ============================================================
+
+    function Normalize-UiText {
+        param(
+            [string]$Text
+        )
+
+        if ($null -eq $Text) {
+            return ""
+        }
+
+        $formD = $Text.Normalize(
+            [System.Text.NormalizationForm]::FormD
+        )
+
+        $builder = New-Object System.Text.StringBuilder
+
+        foreach ($char in $formD.ToCharArray()) {
+            $category =
+                [System.Globalization.CharUnicodeInfo]::GetUnicodeCategory($char)
+
+            if (
+                $category -ne
+                [System.Globalization.UnicodeCategory]::NonSpacingMark
+            ) {
+                [void]$builder.Append($char)
+            }
+        }
+
+        return $builder.ToString().Normalize(
+            [System.Text.NormalizationForm]::FormC
+        ).Trim().ToLowerInvariant()
+    }
+
+
+    # ============================================================
+    # OBTENER PROCESOS HIJOS DEL INSTALADOR
+    # ============================================================
+
+    function Get-ProcessTreeIds {
+        param(
+            [Parameter(Mandatory = $true)]
+            [int]$RootProcessId
+        )
+
+        $ids = New-Object System.Collections.Generic.HashSet[int]
+        [void]$ids.Add($RootProcessId)
+
+        try {
+            $procesos = Get-CimInstance Win32_Process
+        }
+        catch {
+            Write-Host "No se pudo consultar Win32_Process: $_"
+            return @($RootProcessId)
+        }
+
+        $encontro = $true
+
+        while ($encontro) {
+            $encontro = $false
+
+            foreach ($proceso in $procesos) {
+                if (
+                    $ids.Contains([int]$proceso.ParentProcessId) -and
+                    -not $ids.Contains([int]$proceso.ProcessId)
+                ) {
+                    [void]$ids.Add([int]$proceso.ProcessId)
+                    $encontro = $true
+                }
+            }
+        }
+
+        return @($ids)
+    }
+
+
+    # ============================================================
+    # OBTENER VENTANAS VISIBLES DE LOS PROCESOS
+    # ============================================================
+
+    function Get-VisibleWindows {
+        param(
+            [int[]]$ProcessIds
+        )
+
+        $pidSet = New-Object System.Collections.Generic.HashSet[int]
+
+        foreach ($id in $ProcessIds) {
+            [void]$pidSet.Add($id)
+        }
+
+        $resultado = New-Object System.Collections.Generic.List[object]
+
+        $callback = [Win32+EnumWindowsProc]{
+            param(
+                [IntPtr]$hWnd,
+                [IntPtr]$lParam
+            )
+
+            if ([Win32]::IsWindowVisible($hWnd)) {
+                [uint32]$windowPid = 0
+
+                [void][Win32]::GetWindowThreadProcessId(
+                    $hWnd,
+                    [ref]$windowPid
+                )
+
+                if ($pidSet.Contains([int]$windowPid)) {
+                    $length = [Win32]::GetWindowTextLength($hWnd)
+                    $titulo = ""
+
+                    if ($length -gt 0) {
+                        $sb = New-Object System.Text.StringBuilder ($length + 1)
+
+                        [void][Win32]::GetWindowText(
+                            $hWnd,
+                            $sb,
+                            $sb.Capacity
+                        )
+
+                        $titulo = $sb.ToString()
+                    }
+
+                    $resultado.Add(
+                        [PSCustomObject]@{
+                            Handle    = $hWnd
+                            ProcessId = [int]$windowPid
+                            Title     = $titulo
+                        }
+                    )
+                }
+            }
+
+            return $true
+        }
+
+        [void][Win32]::EnumWindows(
+            $callback,
+            [IntPtr]::Zero
+        )
+
+        return $resultado
+    }
+
+
+    # ============================================================
+    # ESPERAR PRIMERA VENTANA DEL INSTALADOR
+    # ============================================================
+
+    function Wait-InstallerWindow {
+        param(
+            [int]$RootProcessId,
+            [int]$TimeoutSeconds = 120
+        )
+
+        Write-Host "Esperando ventana inicial del instalador..."
+
+        $limite = (Get-Date).AddSeconds($TimeoutSeconds)
+
+        while ((Get-Date) -lt $limite) {
+            $pids = Get-ProcessTreeIds -RootProcessId $RootProcessId
+            $ventanas = Get-VisibleWindows -ProcessIds $pids
+
+            if ($ventanas.Count -gt 0) {
+                $ventana = $ventanas | Select-Object -First 1
+
+                Write-Host "Ventana encontrada: $($ventana.Title)"
+                Write-Host "PID de ventana: $($ventana.ProcessId)"
+
+                return $ventana
+            }
+
+            Start-Sleep -Seconds 1
+        }
+
+        throw "No se encontró la ventana inicial del instalador."
+    }
+
+
+    # ============================================================
+    # ACTIVAR VENTANA
+    # ============================================================
+
+    function Activate-Window {
+        param(
+            [Parameter(Mandatory = $true)]
+            $Window
+        )
+
+        [void][Win32]::ShowWindowAsync(
+            $Window.Handle,
+            9
+        )
+
+        Start-Sleep -Milliseconds 300
+
+        $activada = [Win32]::SetForegroundWindow(
+            $Window.Handle
+        )
+
+        if (-not $activada) {
+            try {
+                $wshell = New-Object -ComObject WScript.Shell
+                $activada = $wshell.AppActivate(
+                    [int]$Window.ProcessId
+                )
+            }
+            catch {
+                $activada = $false
+            }
+        }
+
+        Write-Host "Ventana activada: $activada"
+
+        Start-Sleep -Milliseconds 700
+    }
+
+
+    # ============================================================
+    # SENDKEYS CON DIAGNÓSTICO
+    # ============================================================
+
+    function Send-KeySafe {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string]$Keys,
+
+            [string]$Description = $Keys
+        )
+
+        try {
+            Write-Host "Enviando: $Description"
+
+            [System.Windows.Forms.SendKeys]::SendWait(
+                $Keys
+            )
+        }
+        catch {
+            throw "No se pudo enviar '$Description'. Windows devolvió: $($_.Exception.Message). Verifique que Agent.Listener.exe y Agent.Worker.exe estén elevados."
+        }
+    }
+
+
+    # ============================================================
+    # ESPERAR UNA VENTANA POR TÍTULO
+    # ============================================================
+
+    function Wait-WindowByTitle {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string]$Title,
+
+            [int]$TimeoutSeconds = 2700
+        )
+
+        Write-Host ""
+        Write-Host "Esperando ventana: $Title"
+
+        $tituloBuscado = Normalize-UiText $Title
+        $limite = (Get-Date).AddSeconds($TimeoutSeconds)
+
+        $windowCondition = New-Object `
+            System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                [System.Windows.Automation.ControlType]::Window
+            )
+
+        while ((Get-Date) -lt $limite) {
+            try {
+                $root =
+                    [System.Windows.Automation.AutomationElement]::RootElement
+
+                $ventanas = $root.FindAll(
+                    [System.Windows.Automation.TreeScope]::Descendants,
+                    $windowCondition
+                )
+
+                foreach ($ventana in $ventanas) {
+                    try {
+                        $tituloActual =
+                            Normalize-UiText $ventana.Current.Name
+
+                        if ($tituloActual -eq $tituloBuscado) {
+                            Write-Host "Ventana detectada: $($ventana.Current.Name)"
+                            return $ventana
+                        }
+                    }
+                    catch {
+                    }
+                }
+            }
+            catch {
+                Write-Host "Error temporal buscando ventana: $($_.Exception.Message)"
+            }
+
+            Write-Host "$(Get-Date -Format 'HH:mm:ss') - Esperando '$Title'..."
+
+            Start-Sleep -Seconds 3
+        }
+
+        throw "No apareció la ventana '$Title' dentro del tiempo máximo de espera."
+    }
+
+
+    # ============================================================
+    # PRESIONAR BOTÓN POR NOMBRE
+    # ============================================================
+
+    function Invoke-Button {
+        param(
+            [Parameter(Mandatory = $true)]
+            $Window,
+
+            [Parameter(Mandatory = $true)]
+            [string]$ButtonName,
+
+            [int]$TimeoutSeconds = 30
+        )
+
+        $nombreBuscado = Normalize-UiText $ButtonName
+        $limite = (Get-Date).AddSeconds($TimeoutSeconds)
+
+        $buttonCondition = New-Object `
+            System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                [System.Windows.Automation.ControlType]::Button
+            )
+
+        while ((Get-Date) -lt $limite) {
+            try {
+                $botones = $Window.FindAll(
+                    [System.Windows.Automation.TreeScope]::Descendants,
+                    $buttonCondition
+                )
+
+                foreach ($boton in $botones) {
+                    try {
+                        $nombreActual =
+                            Normalize-UiText $boton.Current.Name
+
+                        if (
+                            $nombreActual -eq $nombreBuscado -and
+                            $boton.Current.IsEnabled
+                        ) {
+                            Write-Host "Botón '$($boton.Current.Name)' detectado y habilitado."
+
+                            try {
+                                $invokePattern =
+                                    $boton.GetCurrentPattern(
+                                        [System.Windows.Automation.InvokePattern]::Pattern
+                                    )
+
+                                $invokePattern.Invoke()
+
+                                Write-Host "Botón '$($boton.Current.Name)' presionado mediante UI Automation."
+                                return
+                            }
+                            catch {
+                                Write-Warning "InvokePattern no funcionó. Intentando con foco + ENTER."
+
+                                $boton.SetFocus()
+                                Start-Sleep -Milliseconds 500
+
+                                Send-KeySafe `
+                                    -Keys "{ENTER}" `
+                                    -Description "ENTER sobre botón $ButtonName"
+
+                                return
+                            }
+                        }
+                    }
+                    catch {
+                    }
+                }
+            }
+            catch {
+            }
+
+            Start-Sleep -Milliseconds 500
+        }
+
+        throw "No se encontró habilitado el botón '$ButtonName'."
+    }
+
+
+    # ============================================================
+    # ESPERAR QUE UNA VENTANA SE CIERRE
+    # ============================================================
+
+    function Wait-WindowClosed {
+        param(
+            [Parameter(Mandatory = $true)]
+            $Window,
+
+            [int]$TimeoutSeconds = 30
+        )
+
+        $handle = 0
+
+        try {
+            $handle = [int]$Window.Current.NativeWindowHandle
+        }
+        catch {
+            Write-Host "La ventana ya no está disponible."
+            return
+        }
+
+        if ($handle -eq 0) {
+            Start-Sleep -Seconds 1
+            return
+        }
+
+        $limite = (Get-Date).AddSeconds($TimeoutSeconds)
+
+        while ((Get-Date) -lt $limite) {
+            if (-not [Win32]::IsWindow([IntPtr]$handle)) {
+                Write-Host "Ventana cerrada correctamente."
+                return
+            }
+
+            Start-Sleep -Milliseconds 500
+        }
+
+        Write-Warning "La ventana no confirmó su cierre dentro del tiempo esperado."
+    }
+
+
+    # ============================================================
+    # COMPLETAR "Ingrese la contraseña"
+    # ============================================================
+
+    function Complete-PasswordDialog {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string]$Password,
+
+            [int]$TimeoutSeconds = 120
+        )
+
+        $ventanaPassword =
+            Wait-WindowByTitle `
+                -Title "Ingrese la contraseña" `
+                -TimeoutSeconds $TimeoutSeconds
+
+        Write-Host "Ventana de contraseña encontrada."
+
+        $editCondition = New-Object `
+            System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                [System.Windows.Automation.ControlType]::Edit
+            )
+
+        $campos = $ventanaPassword.FindAll(
+            [System.Windows.Automation.TreeScope]::Descendants,
+            $editCondition
+        )
+
+        $campoPassword = $null
+
+        foreach ($campo in $campos) {
+            try {
+                $esPassword = $campo.Current.IsPassword
+                $nombre = Normalize-UiText $campo.Current.Name
+                $automationId = Normalize-UiText $campo.Current.AutomationId
+
+                if (
+                    $esPassword -or
+                    $nombre -match "password|contrasena|clave" -or
+                    $automationId -match "password|contrasena|clave"
+                ) {
+                    $campoPassword = $campo
+                    break
+                }
+            }
+            catch {
+            }
+        }
+
+        # Fallback para controles antiguos:
+        # en la ventana hay Usuario + Contraseña.
+        # Si no expone IsPassword, se usa el último campo Edit.
+        if (
+            $null -eq $campoPassword -and
+            $campos.Count -ge 2
+        ) {
+            Write-Warning "El control no informó IsPassword. Se usará el último campo Edit como contraseña."
+            $campoPassword = $campos.Item($campos.Count - 1)
+        }
+
+        if ($null -eq $campoPassword) {
+            throw "Se encontró la ventana 'Ingrese la contraseña', pero no el campo de contraseña."
+        }
+
+        Write-Host "Campo de contraseña detectado."
+
+        try {
+            $campoPassword.SetFocus()
+        }
+        catch {
+            Write-Warning "No se pudo establecer foco en el campo mediante UI Automation."
+        }
+
+        Start-Sleep -Milliseconds 500
+
+        $passwordIngresada = $false
+
+        try {
+            $valuePattern =
+                $campoPassword.GetCurrentPattern(
+                    [System.Windows.Automation.ValuePattern]::Pattern
+                )
+
+            $valuePattern.SetValue($Password)
+
+            $passwordIngresada = $true
+
+            Write-Host "Contraseña ingresada mediante UI Automation."
+        }
+        catch {
+            Write-Warning "El campo no permitió ValuePattern. Se intentará mediante portapapeles."
+        }
+
+        if (-not $passwordIngresada) {
+            try {
+                $campoPassword.SetFocus()
+            }
+            catch {
+            }
+
+            Start-Sleep -Milliseconds 500
+
+            Set-Clipboard -Value $Password
+
+            try {
+                Send-KeySafe `
+                    -Keys "^v" `
+                    -Description "pegar contraseña"
+            }
+            finally {
+                Start-Sleep -Milliseconds 500
+                Set-Clipboard -Value ""
+            }
+        }
+
+        # El botón Aceptar de esta ventana está inicialmente
+        # deshabilitado y se habilita después de ingresar la clave.
+        Start-Sleep -Seconds 1
+
+        Invoke-Button `
+            -Window $ventanaPassword `
+            -ButtonName "Aceptar" `
+            -TimeoutSeconds 30
+
+        Write-Host "Contraseña confirmada."
+
+        Wait-WindowClosed `
+            -Window $ventanaPassword `
+            -TimeoutSeconds 30
+    }
+
+
+    # ============================================================
+    # CONFIRMAR "Configuración del Sistema de Gestión" CON "Sí"
+    # ============================================================
+
+    function Confirmar-SistemaGestion {
+        param(
+            [Parameter(Mandatory = $true)]
+            [int]$NumeroConfirmacion,
+
+            [int]$TimeoutSeconds = 120
+        )
+
+        Write-Host ""
+        Write-Host "=============================================="
+        Write-Host "ESPERANDO CONFIRMACIÓN $NumeroConfirmacion"
+        Write-Host "=============================================="
+
+        $ventanaConfirmacion =
+            Wait-WindowByTitle `
+                -Title "Configuración del Sistema de Gestión" `
+                -TimeoutSeconds $TimeoutSeconds
+
+        Write-Host "Ventana de confirmación $NumeroConfirmacion detectada."
+
+        Invoke-Button `
+            -Window $ventanaConfirmacion `
+            -ButtonName "Sí" `
+            -TimeoutSeconds 30
+
+        Write-Host "Confirmación $NumeroConfirmacion aceptada con 'Sí'."
+
+        Wait-WindowClosed `
+            -Window $ventanaConfirmacion `
+            -TimeoutSeconds 30
+
+        Start-Sleep -Seconds 1
+    }
+
+
+    # ============================================================
+    # VALIDAR CONTRASEÑA Y RUTA
+    # ============================================================
+
+    if ([string]::IsNullOrWhiteSpace($env:SETUP_PASSWORD)) {
+        throw "No se encuentra definida la variable secreta SETUP_PASSWORD / SetupPassword."
+    }
+
+    if (-not (Test-Path "C:\Release")) {
+        throw "La carpeta C:\Release no existe en el equipo $env:COMPUTERNAME."
+    }
+
+
+    # ============================================================
+    # BUSCAR EL SETUP
+    # ============================================================
+
+    $archivoExe = Get-ChildItem `
+        -Path "C:\Release" `
+        -Filter "*.exe" `
+        -File |
+        Select-Object -First 1
+
+    if (-not $archivoExe) {
+        throw "No se encontró ningún archivo .exe en C:\Release."
+    }
+
+    Write-Host ""
+    Write-Host "Setup encontrado:"
+    Write-Host $archivoExe.FullName
+
+
+    # ============================================================
+    # EJECUTAR INSTALADOR
+    # ============================================================
+
+    $instalador = Start-Process `
+        -FilePath $archivoExe.FullName `
+        -PassThru
+
+    Write-Host "Instalador iniciado: $($archivoExe.FullName)"
+    Write-Host "PID inicial: $($instalador.Id)"
+
+
+    # ============================================================
+    # ESPERAR VENTANA INICIAL
+    # ============================================================
+
+    $ventanaInicial =
+        Wait-InstallerWindow `
+            -RootProcessId $instalador.Id `
+            -TimeoutSeconds 120
+
+    Activate-Window `
+        -Window $ventanaInicial
+
+
+    # ============================================================
+    # PASOS INICIALES DEL INSTALADOR
+    # ============================================================
+
+    Write-Host ""
+    Write-Host "Avanzando pantalla inicial..."
+
+    Send-KeySafe `
+        -Keys "{ENTER}" `
+        -Description "ENTER inicial"
+
+    Start-Sleep -Seconds 5
+
+    Write-Host "Seleccionando primera opción..."
+
+    Activate-Window `
+        -Window $ventanaInicial
+
+    Send-KeySafe `
+        -Keys "{TAB}" `
+        -Description "TAB primer checkbox"
+
+    Send-KeySafe `
+        -Keys " " `
+        -Description "ESPACIO primer checkbox"
+
+    Start-Sleep -Seconds 1
+
+    Send-KeySafe `
+        -Keys "{ENTER}" `
+        -Description "ENTER confirmar primer checkbox"
+
+    Start-Sleep -Seconds 5
+
+    Write-Host "Seleccionando segunda opción..."
+
+    Activate-Window `
+        -Window $ventanaInicial
+
+    Send-KeySafe `
+        -Keys "{TAB}" `
+        -Description "TAB segundo checkbox"
+
+    Send-KeySafe `
+        -Keys " " `
+        -Description "ESPACIO segundo checkbox"
+
+    Start-Sleep -Seconds 1
+
+    Send-KeySafe `
+        -Keys "{ENTER}" `
+        -Description "ENTER confirmar segundo checkbox"
+
+    Start-Sleep -Seconds 1
+
+    Write-Host "Iniciando instalación..."
+
+    Activate-Window `
+        -Window $ventanaInicial
+
+    Send-KeySafe `
+        -Keys "{ENTER}" `
+        -Description "ENTER iniciar instalación"
+
+
+    # ============================================================
+    # ESPERA CORTA INICIAL
+    # ============================================================
+
+    Write-Host ""
+    Write-Host "Instalación trabajando..."
+
+    Start-Sleep -Seconds 20
+
+
+    # ============================================================
+    # PASO 1 - DETECTAR ACTUALIZACIÓN DE BASES
+    # ============================================================
+
+    Write-Host ""
+    Write-Host "=============================================="
+    Write-Host "ESPERANDO ACTUALIZACIÓN DE BASES DE DATOS"
+    Write-Host "=============================================="
+
+    $ventanaActualizacion =
+        Wait-WindowByTitle `
+            -Title "Actualización de bases de datos" `
+            -TimeoutSeconds 2700
+
+    Write-Host "Ventana de actualización de bases detectada."
+
+
+    # ============================================================
+    # PASO 2 - CLICK EN ACEPTAR
+    # ============================================================
+
+    Invoke-Button `
+        -Window $ventanaActualizacion `
+        -ButtonName "Aceptar" `
+        -TimeoutSeconds 30
+
+    Write-Host "Botón Aceptar de actualización de bases presionado."
+
+
+    # ============================================================
+    # PASO 3 - INGRESAR CONTRASEÑA Y ACEPTAR
+    # ============================================================
+
+    Complete-PasswordDialog `
+        -Password $env:SETUP_PASSWORD `
+        -TimeoutSeconds 120
+
+    Write-Host ""
+    Write-Host "=============================================="
+    Write-Host "AUTENTICACIÓN COMPLETADA"
+    Write-Host "=============================================="
+
+
+    # ============================================================
+    # PASO 4 - PRIMERA CONFIRMACIÓN -> SÍ
+    # ============================================================
+
+    Confirmar-SistemaGestion `
+        -NumeroConfirmacion 1 `
+        -TimeoutSeconds 120
+
+
+    # ============================================================
+    # PASO 5 - SEGUNDA CONFIRMACIÓN -> SÍ
+    # ============================================================
+
+    Confirmar-SistemaGestion `
+        -NumeroConfirmacion 2 `
+        -TimeoutSeconds 120
+
+
+    # ============================================================
+    # FINAL
+    # ============================================================
+
+    Write-Host ""
+    Write-Host "=============================================="
+    Write-Host "LAS DOS CONFIRMACIONES FUERON ACEPTADAS"
+    Write-Host "Automatización del instalador completada."
+    Write-Host "=============================================="
+
+  env:
+    SETUP_PASSWORD: $(SetupPassword)
+
+  displayName: 'Instalar Setup Softland'
+  timeoutInMinutes: 90
