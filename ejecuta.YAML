@@ -76,6 +76,33 @@ steps:
 
         [DllImport("user32.dll")]
         public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+
+        public delegate bool EnumChildWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        public static extern bool EnumChildWindows(
+            IntPtr hWndParent,
+            EnumChildWindowsProc lpEnumFunc,
+            IntPtr lParam
+        );
+
+        [DllImport("user32.dll")]
+        public static extern bool IsWindowEnabled(IntPtr hWnd);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern int GetClassName(
+            IntPtr hWnd,
+            StringBuilder lpClassName,
+            int nMaxCount
+        );
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr SendMessage(
+            IntPtr hWnd,
+            uint Msg,
+            IntPtr wParam,
+            IntPtr lParam
+        );
     }
     "@
 
@@ -284,7 +311,97 @@ steps:
     }
 
     # ============================================================
-    # CLICK REAL SOBRE BOTÓN POR NOMBRE
+    # BUSCAR BOTÓN NATIVO/LEGACY POR TEXTO
+    #
+    # Algunos instaladores antiguos no exponen sus botones como
+    # ControlType.Button a UI Automation. En ese caso enumeramos
+    # los controles hijos Win32 y buscamos el texto del botón.
+    # ============================================================
+
+    function Get-NativeButtonByName {
+        param(
+            [Parameter(Mandatory = $true)]
+            $Window,
+
+            [Parameter(Mandatory = $true)]
+            [string]$ButtonName
+        )
+
+        $resultado = New-Object System.Collections.Generic.List[object]
+        $nombreBuscado = Normalize-UiText $ButtonName
+
+        $callback = [Win32+EnumChildWindowsProc]{
+            param(
+                [IntPtr]$hWnd,
+                [IntPtr]$lParam
+            )
+
+            try {
+                $length = [Win32]::GetWindowTextLength($hWnd)
+                $texto = ""
+
+                if ($length -gt 0) {
+                    $sb = New-Object System.Text.StringBuilder ($length + 1)
+
+                    [void][Win32]::GetWindowText(
+                        $hWnd,
+                        $sb,
+                        $sb.Capacity
+                    )
+
+                    $texto = $sb.ToString()
+                }
+
+                $classSb = New-Object System.Text.StringBuilder 256
+
+                [void][Win32]::GetClassName(
+                    $hWnd,
+                    $classSb,
+                    $classSb.Capacity
+                )
+
+                $clase = $classSb.ToString()
+
+                if ($texto) {
+                    Write-Host "Control Win32 encontrado: Clase=[$clase] Texto=[$texto]"
+                }
+
+                if (
+                    (Normalize-UiText $texto) -eq $nombreBuscado -and
+                    [Win32]::IsWindowEnabled($hWnd)
+                ) {
+                    $resultado.Add(
+                        [PSCustomObject]@{
+                            Handle = $hWnd
+                            Text   = $texto
+                            Class  = $clase
+                        }
+                    )
+                }
+            }
+            catch {
+            }
+
+            return $true
+        }
+
+        [void][Win32]::EnumChildWindows(
+            $Window.Handle,
+            $callback,
+            [IntPtr]::Zero
+        )
+
+        return $resultado | Select-Object -First 1
+    }
+
+
+    # ============================================================
+    # CLICK SOBRE BOTÓN POR NOMBRE
+    #
+    # Orden de intento:
+    # 1) UI Automation / InvokePattern
+    # 2) Win32 legacy / BM_CLICK
+    # 3) Fallback: activar ventana + ENTER
     # ============================================================
 
     function Click-ButtonByName {
@@ -308,74 +425,119 @@ steps:
             )
 
         while ((Get-Date) -lt $limite) {
+
+            # ----------------------------------------------------
+            # MÉTODO 1: UI AUTOMATION
+            # ----------------------------------------------------
+
             try {
                 $elementoVentana =
                     [System.Windows.Automation.AutomationElement]::FromHandle(
                         $Window.Handle
                     )
 
-                if ($null -eq $elementoVentana) {
-                    Start-Sleep -Milliseconds 500
-                    continue
-                }
+                if ($null -ne $elementoVentana) {
+                    $botones = $elementoVentana.FindAll(
+                        [System.Windows.Automation.TreeScope]::Descendants,
+                        $buttonCondition
+                    )
 
-                $botones = $elementoVentana.FindAll(
-                    [System.Windows.Automation.TreeScope]::Descendants,
-                    $buttonCondition
-                )
+                    foreach ($boton in $botones) {
+                        try {
+                            $nombreBoton = $boton.Current.Name
 
-                foreach ($boton in $botones) {
-                    try {
-                        $nombreBoton = $boton.Current.Name
+                            Write-Host "Botón UIA encontrado: [$nombreBoton]"
 
-                        Write-Host "Botón encontrado: [$nombreBoton]"
+                            if (
+                                (Normalize-UiText $nombreBoton) -eq $nombreBuscado
+                            ) {
+                                if (-not $boton.Current.IsEnabled) {
+                                    Write-Host "Botón '$ButtonName' encontrado pero todavía deshabilitado."
+                                }
+                                else {
+                                    try {
+                                        $invokePattern =
+                                            $boton.GetCurrentPattern(
+                                                [System.Windows.Automation.InvokePattern]::Pattern
+                                            )
 
-                        if (
-                            (Normalize-UiText $nombreBoton) -eq $nombreBuscado
-                        ) {
-                            if (-not $boton.Current.IsEnabled) {
-                                Write-Host "Botón '$ButtonName' encontrado pero todavía deshabilitado."
-                                continue
-                            }
+                                        $invokePattern.Invoke()
 
-                            try {
-                                $invokePattern =
-                                    $boton.GetCurrentPattern(
-                                        [System.Windows.Automation.InvokePattern]::Pattern
-                                    )
+                                        Write-Host "Click realizado sobre '$ButtonName' mediante UI Automation."
 
-                                $invokePattern.Invoke()
-
-                                Write-Host "Click realizado sobre '$ButtonName'."
-                                return
-                            }
-                            catch {
-                                Write-Warning "InvokePattern no funcionó. Intentando foco + ENTER."
-
-                                $boton.SetFocus()
-                                Start-Sleep -Milliseconds 500
-
-                                Send-KeySafe `
-                                    -Keys "{ENTER}" `
-                                    -Description "ENTER sobre botón $ButtonName"
-
-                                return
+                                        return
+                                    }
+                                    catch {
+                                        Write-Warning "UI Automation encontró '$ButtonName' pero InvokePattern falló."
+                                    }
+                                }
                             }
                         }
-                    }
-                    catch {
+                        catch {
+                        }
                     }
                 }
             }
             catch {
-                Write-Host "Error temporal buscando botón '$ButtonName': $($_.Exception.Message)"
+                Write-Host "UI Automation no pudo inspeccionar el botón: $($_.Exception.Message)"
             }
+
+
+            # ----------------------------------------------------
+            # MÉTODO 2: CONTROL NATIVO WIN32
+            # Ideal para instaladores antiguos.
+            # BM_CLICK = 0x00F5
+            # ----------------------------------------------------
+
+            $botonNativo = Get-NativeButtonByName `
+                -Window $Window `
+                -ButtonName $ButtonName
+
+            if ($botonNativo) {
+                Write-Host ""
+                Write-Host "BOTÓN NATIVO DETECTADO"
+                Write-Host "Texto : $($botonNativo.Text)"
+                Write-Host "Clase : $($botonNativo.Class)"
+                Write-Host "Handle: $($botonNativo.Handle)"
+
+                [void][Win32]::SendMessage(
+                    $botonNativo.Handle,
+                    0x00F5,
+                    [IntPtr]::Zero,
+                    [IntPtr]::Zero
+                )
+
+                Write-Host "BM_CLICK enviado al botón '$ButtonName'."
+
+                Start-Sleep -Milliseconds 750
+
+                return
+            }
+
+
+            Write-Host "Esperando botón '$ButtonName'..."
 
             Start-Sleep -Seconds 1
         }
 
-        throw "No se encontró habilitado el botón '$ButtonName'."
+
+        # --------------------------------------------------------
+        # MÉTODO 3: FALLBACK PARA BOTÓN PREDETERMINADO
+        # --------------------------------------------------------
+
+        Write-Warning "El botón '$ButtonName' no fue expuesto por UI Automation ni Win32."
+        Write-Warning "Se activará la ventana y se enviará ENTER como fallback."
+
+        Activate-Window `
+            -Window $Window
+
+        Send-KeySafe `
+            -Keys "{ENTER}" `
+            -Description "ENTER fallback para $ButtonName"
+
+        Start-Sleep -Seconds 1
     }
+
 
     # ============================================================
     # ESPERAR CIERRE DE VENTANA
