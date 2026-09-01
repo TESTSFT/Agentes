@@ -1,3 +1,7 @@
+trigger: none
+
+pool:
+  name: 'Softland-QA'
 
 steps:
 - powershell: |
@@ -82,150 +86,6 @@ steps:
         public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
     }
     "@
-
-
-    # ============================================================
-    # OBTENER PROCESOS HIJOS DEL INSTALADOR
-    # ============================================================
-
-    function Get-ProcessTreeIds {
-        param(
-            [Parameter(Mandatory = $true)]
-            [int]$RootProcessId
-        )
-
-        $ids = New-Object System.Collections.Generic.HashSet[int]
-        [void]$ids.Add($RootProcessId)
-
-        try {
-            $procesos = Get-CimInstance Win32_Process
-        }
-        catch {
-            Write-Host "No se pudo consultar Win32_Process: $_"
-            return @($RootProcessId)
-        }
-
-        $encontro = $true
-
-        while ($encontro) {
-            $encontro = $false
-
-            foreach ($proceso in $procesos) {
-                if (
-                    $ids.Contains([int]$proceso.ParentProcessId) -and
-                    -not $ids.Contains([int]$proceso.ProcessId)
-                ) {
-                    [void]$ids.Add([int]$proceso.ProcessId)
-                    $encontro = $true
-                }
-            }
-        }
-
-        return @($ids)
-    }
-
-
-    # ============================================================
-    # OBTENER VENTANAS VISIBLES DE LOS PROCESOS
-    # ============================================================
-
-    function Get-VisibleWindows {
-        param(
-            [int[]]$ProcessIds
-        )
-
-        $pidSet = New-Object System.Collections.Generic.HashSet[int]
-
-        foreach ($id in $ProcessIds) {
-            [void]$pidSet.Add($id)
-        }
-
-        $resultado = New-Object System.Collections.Generic.List[object]
-
-        $callback = [Win32+EnumWindowsProc]{
-            param(
-                [IntPtr]$hWnd,
-                [IntPtr]$lParam
-            )
-
-            if ([Win32]::IsWindowVisible($hWnd)) {
-                [uint32]$windowPid = 0
-
-                [void][Win32]::GetWindowThreadProcessId(
-                    $hWnd,
-                    [ref]$windowPid
-                )
-
-                if ($pidSet.Contains([int]$windowPid)) {
-                    $length = [Win32]::GetWindowTextLength($hWnd)
-                    $titulo = ""
-
-                    if ($length -gt 0) {
-                        $sb = New-Object System.Text.StringBuilder ($length + 1)
-
-                        [void][Win32]::GetWindowText(
-                            $hWnd,
-                            $sb,
-                            $sb.Capacity
-                        )
-
-                        $titulo = $sb.ToString()
-                    }
-
-                    $resultado.Add(
-                        [PSCustomObject]@{
-                            Handle    = $hWnd
-                            ProcessId = [int]$windowPid
-                            Title     = $titulo
-                        }
-                    )
-                }
-            }
-
-            return $true
-        }
-
-        [void][Win32]::EnumWindows(
-            $callback,
-            [IntPtr]::Zero
-        )
-
-        return $resultado
-    }
-
-
-    # ============================================================
-    # ESPERAR PRIMERA VENTANA DEL INSTALADOR
-    # ============================================================
-
-    function Wait-InstallerWindow {
-        param(
-            [int]$RootProcessId,
-            [int]$TimeoutSeconds = 120
-        )
-
-        Write-Host "Esperando ventana inicial del instalador..."
-
-        $limite = (Get-Date).AddSeconds($TimeoutSeconds)
-
-        while ((Get-Date) -lt $limite) {
-            $pids = Get-ProcessTreeIds -RootProcessId $RootProcessId
-            $ventanas = Get-VisibleWindows -ProcessIds $pids
-
-            if ($ventanas.Count -gt 0) {
-                $ventana = $ventanas | Select-Object -First 1
-
-                Write-Host "Ventana encontrada: $($ventana.Title)"
-                Write-Host "PID de ventana: $($ventana.ProcessId)"
-
-                return $ventana
-            }
-
-            Start-Sleep -Seconds 1
-        }
-
-        throw "No se encontró la ventana inicial del instalador."
-    }
 
 
     # ============================================================
@@ -479,15 +339,23 @@ steps:
 
 
     # ============================================================
-    # ESPERAR VENTANA INICIAL
+    # ESPERAR VENTANA INICIAL GLOBALMENTE
+    # CORRECCIÓN: ya no depende del PID inicial.
     # ============================================================
 
-    $ventanaInicial = Wait-InstallerWindow `
-        -RootProcessId $instalador.Id `
+    Write-Host ""
+    Write-Host "Esperando ventana inicial 'Instalación de Softland'..."
+
+    $ventanaInicial = Wait-WindowGlobal `
+        -Title "Instalación de Softland" `
         -TimeoutSeconds 120
+
+    Write-Host "Ventana inicial detectada."
 
     Activate-Window `
         -Window $ventanaInicial
+
+    Start-Sleep -Seconds 1
 
 
     # ============================================================
@@ -572,7 +440,7 @@ steps:
 
     # ============================================================
     # 1 - ESPERAR "Actualización de bases de datos"
-    # Busca en TODO Windows y no sólo en el PID inicial.
+    # Busca en TODO Windows.
     # ============================================================
 
     $ventanaBD = Wait-WindowGlobal `
@@ -788,3 +656,4 @@ steps:
     SETUP_PASSWORD: $(SetupPassword)
 
   displayName: 'Ejecutar Setup Softland en equipo QA'
+  timeoutInMinutes: 90
