@@ -1,0 +1,40 @@
+trigger: none
+
+pool:
+  name: 'Softland-QA'
+
+stages:
+
+# ============================================================
+# STAGE 1 - ACTUALIZAR CARPETAS RELEASE
+# ============================================================
+
+- stage: ActualizaCarpetaRelease
+  displayName: '01 - Actualizar carpetas Release'
+
+  jobs:
+  - job: ActualizarRelease
+    displayName: 'Actualizar Setup SAR y OFISIS'
+
+    steps:
+    - template: ActualizaCarpetaRelease.YAML
+
+
+# ============================================================
+# STAGE 2 - EJECUTAR SETUP
+# ============================================================
+
+- stage: EjecutaSetup
+  displayName: '02 - Ejecutar Setup'
+
+  dependsOn: ActualizaCarpetaRelease
+  condition: succeeded()
+
+  jobs:
+  - job: InstalarSetup
+    displayName: 'Ejecutar Setup Softland'
+
+    timeoutInMinutes: 90
+
+    steps:
+    - template: ejecuta.YAML
