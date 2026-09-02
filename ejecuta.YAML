@@ -103,6 +103,20 @@ steps:
             IntPtr wParam,
             IntPtr lParam
         );
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern IntPtr SendMessage(
+            IntPtr hWnd,
+            uint Msg,
+            IntPtr wParam,
+            string lParam
+        );
+
+        [DllImport("user32.dll")]
+        public static extern int GetWindowLong(
+            IntPtr hWnd,
+            int nIndex
+        );
     }
     "@
 
@@ -578,112 +592,210 @@ steps:
     }
 
     # ============================================================
-    # ESPERAR DIÁLOGO CON CAMPO PASSWORD
+    # OBTENER TEXTBOX NATIVOS DE UNA VENTANA
+    #
+    # El instalador utiliza controles VB6/ThunderRT6.
+    # Estos controles pueden no aparecer correctamente en UI Automation.
     # ============================================================
 
-    function Wait-PasswordDialogGlobal {
+    function Get-NativeTextBoxes {
         param(
-            [int]$TimeoutSeconds = 120
+            [Parameter(Mandatory = $true)]
+            $Window
         )
 
-        Write-Host ""
-        Write-Host "Esperando diálogo con campo de contraseña..."
+        $resultado = New-Object System.Collections.Generic.List[object]
 
-        $limite = (Get-Date).AddSeconds($TimeoutSeconds)
-
-        $windowCondition = New-Object `
-            System.Windows.Automation.PropertyCondition(
-                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-                [System.Windows.Automation.ControlType]::Window
+        $callback = [Win32+EnumChildWindowsProc]{
+            param(
+                [IntPtr]$hWnd,
+                [IntPtr]$lParam
             )
 
-        $editCondition = New-Object `
-            System.Windows.Automation.PropertyCondition(
-                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-                [System.Windows.Automation.ControlType]::Edit
-            )
-
-        while ((Get-Date) -lt $limite) {
             try {
-                $root =
-                    [System.Windows.Automation.AutomationElement]::RootElement
+                $classSb = New-Object System.Text.StringBuilder 256
 
-                $ventanas = $root.FindAll(
-                    [System.Windows.Automation.TreeScope]::Descendants,
-                    $windowCondition
+                [void][Win32]::GetClassName(
+                    $hWnd,
+                    $classSb,
+                    $classSb.Capacity
                 )
 
-                foreach ($ventana in $ventanas) {
-                    try {
-                        $campos = $ventana.FindAll(
-                            [System.Windows.Automation.TreeScope]::Descendants,
-                            $editCondition
+                $clase = $classSb.ToString()
+
+                if (
+                    $clase -match "(?i)textbox|edit"
+                ) {
+                    $length = [Win32]::GetWindowTextLength($hWnd)
+                    $texto = ""
+
+                    if ($length -gt 0) {
+                        $sb = New-Object System.Text.StringBuilder ($length + 1)
+
+                        [void][Win32]::GetWindowText(
+                            $hWnd,
+                            $sb,
+                            $sb.Capacity
                         )
 
-                        $campoPassword = $null
-
-                        foreach ($campo in $campos) {
-                            try {
-                                if ($campo.Current.IsPassword) {
-                                    $campoPassword = $campo
-                                    break
-                                }
-                            }
-                            catch {
-                            }
-                        }
-
-                        # Fallback para el diálogo observado:
-                        # Usuario + Contraseña
-                        if (
-                            $null -eq $campoPassword -and
-                            (Normalize-UiText $ventana.Current.Name) -eq
-                            (Normalize-UiText "Ingrese la contraseña") -and
-                            $campos.Count -ge 2
-                        ) {
-                            $campoPassword =
-                                $campos.Item($campos.Count - 1)
-                        }
-
-                        if ($null -ne $campoPassword) {
-                            $handle =
-                                [IntPtr]$ventana.Current.NativeWindowHandle
-
-                            [uint32]$windowPid = 0
-
-                            [void][Win32]::GetWindowThreadProcessId(
-                                $handle,
-                                [ref]$windowPid
-                            )
-
-                            Write-Host ""
-                            Write-Host "DIÁLOGO DE CONTRASEÑA DETECTADO"
-                            Write-Host "Título: $($ventana.Current.Name)"
-                            Write-Host "PID: $windowPid"
-
-                            return [PSCustomObject]@{
-                                Handle        = $handle
-                                ProcessId     = [int]$windowPid
-                                Title         = $ventana.Current.Name
-                                Element       = $ventana
-                                PasswordField = $campoPassword
-                            }
-                        }
+                        $texto = $sb.ToString()
                     }
-                    catch {
-                    }
+
+                    # GWL_STYLE = -16
+                    # ES_PASSWORD = 0x20
+                    $style = [Win32]::GetWindowLong(
+                        $hWnd,
+                        -16
+                    )
+
+                    $esPassword = (($style -band 0x20) -ne 0)
+
+                    Write-Host "TextBox nativo: Clase=[$clase] Texto=[$texto] PasswordStyle=[$esPassword] Handle=[$hWnd]"
+
+                    $resultado.Add(
+                        [PSCustomObject]@{
+                            Handle     = $hWnd
+                            Class      = $clase
+                            Text       = $texto
+                            IsPassword = $esPassword
+                            Enabled    = [Win32]::IsWindowEnabled($hWnd)
+                        }
+                    )
                 }
             }
             catch {
-                Write-Host "Error temporal buscando contraseña: $($_.Exception.Message)"
             }
 
-            Write-Host "$(Get-Date -Format 'HH:mm:ss') - Esperando diálogo de contraseña..."
-            Start-Sleep -Seconds 2
+            return $true
         }
 
-        throw "No apareció ningún diálogo con campo de contraseña."
+        [void][Win32]::EnumChildWindows(
+            $Window.Handle,
+            $callback,
+            [IntPtr]::Zero
+        )
+
+        return $resultado
     }
+
+
+    # ============================================================
+    # ESPERAR Y COMPLETAR "Ingrese la contraseña"
+    #
+    # Flujo:
+    # 1) espera la ventana por título usando Win32
+    # 2) enumera TextBox VB6/ThunderRT6
+    # 3) identifica el Password por ES_PASSWORD
+    # 4) fallback: usa el TextBox vacío / último TextBox
+    # 5) escribe mediante WM_SETTEXT
+    # 6) espera que Aceptar quede habilitado y hace click
+    # ============================================================
+
+    function Complete-PasswordDialogNative {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string]$Password,
+
+            [int]$TimeoutSeconds = 120
+        )
+
+        $ventanaPassword = Wait-WindowGlobal `
+            -Title "Ingrese la contraseña" `
+            -TimeoutSeconds $TimeoutSeconds
+
+        Write-Host ""
+        Write-Host "VENTANA DE CONTRASEÑA DETECTADA"
+        Write-Host "Título: $($ventanaPassword.Title)"
+        Write-Host "PID: $($ventanaPassword.ProcessId)"
+        Write-Host "Handle: $($ventanaPassword.Handle)"
+
+        $limite = (Get-Date).AddSeconds(30)
+        $campoPassword = $null
+
+        while (
+            (Get-Date) -lt $limite -and
+            $null -eq $campoPassword
+        ) {
+            $textboxes = @(
+                Get-NativeTextBoxes `
+                    -Window $ventanaPassword
+            )
+
+            # Primer criterio: estilo ES_PASSWORD
+            $campoPassword =
+                $textboxes |
+                Where-Object {
+                    $_.IsPassword -and $_.Enabled
+                } |
+                Select-Object -First 1
+
+            # Segundo criterio: TextBox vacío.
+            # En la pantalla observada el usuario contiene "sa"
+            # y el campo Contraseña está vacío.
+            if ($null -eq $campoPassword) {
+                $campoPassword =
+                    $textboxes |
+                    Where-Object {
+                        $_.Enabled -and
+                        [string]::IsNullOrEmpty($_.Text)
+                    } |
+                    Select-Object -Last 1
+            }
+
+            # Último fallback: último TextBox encontrado.
+            if (
+                $null -eq $campoPassword -and
+                $textboxes.Count -ge 2
+            ) {
+                Write-Warning "No se detectó ES_PASSWORD. Se utilizará el último TextBox nativo."
+
+                $campoPassword =
+                    $textboxes |
+                    Select-Object -Last 1
+            }
+
+            if ($null -eq $campoPassword) {
+                Write-Host "Esperando controles de Usuario/Contraseña..."
+                Start-Sleep -Seconds 1
+            }
+        }
+
+        if ($null -eq $campoPassword) {
+            throw "Se detectó 'Ingrese la contraseña', pero no se encontró el TextBox de contraseña."
+        }
+
+        Write-Host ""
+        Write-Host "CAMPO CONTRASEÑA NATIVO DETECTADO"
+        Write-Host "Clase : $($campoPassword.Class)"
+        Write-Host "Handle: $($campoPassword.Handle)"
+        Write-Host "PasswordStyle: $($campoPassword.IsPassword)"
+
+        # WM_SETTEXT = 0x000C
+        [void][Win32]::SendMessage(
+            $campoPassword.Handle,
+            0x000C,
+            [IntPtr]::Zero,
+            $Password
+        )
+
+        Write-Host "Contraseña enviada al TextBox mediante WM_SETTEXT."
+
+        Start-Sleep -Seconds 1
+
+        # Aceptar está deshabilitado hasta que la contraseña se complete.
+        Click-ButtonByName `
+            -Window $ventanaPassword `
+            -ButtonName "Aceptar" `
+            -TimeoutSeconds 30 `
+            -PollSeconds 1
+
+        Write-Host "Contraseña confirmada correctamente."
+
+        Wait-WindowClosed `
+            -Window $ventanaPassword `
+            -TimeoutSeconds 30
+    }
+
 
     # ============================================================
     # VALIDACIONES PREVIAS
@@ -827,74 +939,15 @@ steps:
 
     # ============================================================
     # CONTRASEÑA
+    #
+    # El diálogo es VB6/ThunderRT6, por lo que se trabaja
+    # directamente con controles Win32 nativos.
     # ============================================================
 
-    $ventanaPassword =
-        Wait-PasswordDialogGlobal `
-            -TimeoutSeconds 120
+    Complete-PasswordDialogNative `
+        -Password $env:SETUP_PASSWORD `
+        -TimeoutSeconds 120
 
-    $campoPassword =
-        $ventanaPassword.PasswordField
-
-    try {
-        $campoPassword.SetFocus()
-    }
-    catch {
-        Write-Warning "No se pudo establecer foco en el campo de contraseña."
-    }
-
-    Start-Sleep -Milliseconds 500
-
-    $passwordOK = $false
-
-    try {
-        $valuePattern =
-            $campoPassword.GetCurrentPattern(
-                [System.Windows.Automation.ValuePattern]::Pattern
-            )
-
-        $valuePattern.SetValue(
-            $env:SETUP_PASSWORD
-        )
-
-        $passwordOK = $true
-
-        Write-Host "Contraseña ingresada mediante UI Automation."
-    }
-    catch {
-        Write-Host "ValuePattern no disponible. Usando portapapeles."
-    }
-
-    if (-not $passwordOK) {
-        $campoPassword.SetFocus()
-
-        Start-Sleep -Milliseconds 500
-
-        Set-Clipboard -Value $env:SETUP_PASSWORD
-
-        try {
-            Send-KeySafe `
-                -Keys "^v" `
-                -Description "pegar contraseña"
-        }
-        finally {
-            Start-Sleep -Milliseconds 500
-            Set-Clipboard -Value ""
-        }
-    }
-
-    Start-Sleep -Seconds 1
-
-    Click-ButtonByName `
-        -Window $ventanaPassword `
-        -ButtonName "Aceptar" `
-        -TimeoutSeconds 30
-
-    Write-Host "Contraseña confirmada."
-
-    Wait-WindowClosed `
-        -Window $ventanaPassword `
-        -TimeoutSeconds 30
 
     # ============================================================
     # PRIMERA CONFIRMACIÓN
