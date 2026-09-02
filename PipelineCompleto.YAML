@@ -2,65 +2,69 @@ trigger: none
 
 schedules:
 - cron: "30 18 * * *"
-  displayName: Ejecutar diariamente 15:30 ARG
+  displayName: "Ejecutar diariamente 15:30 ARG"
   branches:
     include:
     - main
   always: true
 
-
-stages:
- 
 # ============================================================
 # STAGE 1 - ACTUALIZAR CARPETAS RELEASE
 # ============================================================
- 
+
+stages:
+
 - stage: ActualizaCarpetaRelease
-  displayName: '01 - Actualizar carpetas Release'
- 
+  displayName: "01 - Actualizar carpetas Release"
+
   jobs:
- 
+
   - job: ActualizarRelease
-    displayName: 'Actualizar Setup SAR y OFISIS'
- 
+
+    strategy:
+      matrix:
+        QA01:
+          AgentName: "Softland-QA-01"
+        QA02:
+          AgentName: "Softland-QA-02"
+
     pool:
-      name: 'Softland-QA'
+      name: "Softland-QA"
       demands:
       - Agent.OS -equals Windows_NT
-      - Agent.Name -equals Softland-QA-01
-      - Agent.OS -equals Windows_NT
-      - Agent.Name -equals Softland-QA-02
- 
+      - Agent.Name -equals $(AgentName)
+
     steps:
- 
-    - template: ActualizaCarpetaRelease.YAML
- 
- 
+    - template: ActualizaCarpetaRelease.yaml
+
 # ============================================================
 # STAGE 2 - EJECUTAR SETUP
 # ============================================================
- 
+
 - stage: EjecutaSetup
-  displayName: '02 - Ejecutar Setup'
- 
+  displayName: "02 - Ejecutar Setup"
+
   dependsOn: ActualizaCarpetaRelease
   condition: succeeded()
- 
+
   jobs:
- 
+
   - job: InstalarSetup
-    displayName: 'Ejecutar Setup Softland'
- 
+
+    strategy:
+      matrix:
+        QA01:
+          AgentName: "Softland-QA-01"
+        QA02:
+          AgentName: "Softland-QA-02"
+
     pool:
-      name: 'Softland-QA'
+      name: "Softland-QA"
       demands:
       - Agent.OS -equals Windows_NT
-      - Agent.Name -equals Softland-QA-01
-      - Agent.OS -equals Windows_NT
-      - Agent.Name -equals Softland-QA-02
- 
+      - Agent.Name -equals $(AgentName)
+
     timeoutInMinutes: 90
- 
+
     steps:
- 
-    - template: ejecuta.YAML
+    - template: ejecuta.yaml
