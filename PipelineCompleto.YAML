@@ -27,6 +27,7 @@ stages:
       name: 'Softland-QA'
       demands:
       - Agent.OS -equals Windows_NT
+      - Agent.Name -equals Softland-QA-01
       - Agent.Name -equals Softland-QA-02
  
     steps:
@@ -53,6 +54,7 @@ stages:
       name: 'Softland-QA'
       demands:
       - Agent.OS -equals Windows_NT
+      - Agent.Name -equals Softland-QA-01
       - Agent.Name -equals Softland-QA-02
  
     timeoutInMinutes: 90
