@@ -1,51 +1,53 @@
 trigger: none
-
+ 
 stages:
-
+ 
 # ============================================================
 # STAGE 1 - ACTUALIZAR CARPETAS RELEASE
 # ============================================================
-
+ 
 - stage: ActualizaCarpetaRelease
   displayName: '01 - Actualizar carpetas Release'
-
+ 
   jobs:
-
+ 
   - job: ActualizarRelease
     displayName: 'Actualizar Setup SAR y OFISIS'
-
+ 
     pool:
       name: 'Softland-QA'
       demands:
       - Agent.OS -equals Windows_NT
-
+      - Agent.Name -equals Softland-QA-02
+ 
     steps:
-
+ 
     - template: ActualizaCarpetaRelease.YAML
-
-
+ 
+ 
 # ============================================================
 # STAGE 2 - EJECUTAR SETUP
 # ============================================================
-
+ 
 - stage: EjecutaSetup
   displayName: '02 - Ejecutar Setup'
-
+ 
   dependsOn: ActualizaCarpetaRelease
   condition: succeeded()
-
+ 
   jobs:
-
+ 
   - job: InstalarSetup
     displayName: 'Ejecutar Setup Softland'
-
+ 
     pool:
       name: 'Softland-QA'
       demands:
       - Agent.OS -equals Windows_NT
-
+      - Agent.Name -equals Softland-QA-02
+ 
     timeoutInMinutes: 90
-
+ 
     steps:
-
+ 
     - template: ejecuta.YAML
