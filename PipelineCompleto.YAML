@@ -1,13 +1,5 @@
 trigger: none
 
-schedules:
-- cron: "30 18 * * *"
-  displayName: Ejecutar diariamente 15:30 ARG
-  branches:
-    include:
-    - main
-  always: true
-
 stages:
 
 - stage: ActualizaCarpetaRelease
