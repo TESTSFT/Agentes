@@ -1,7 +1,7 @@
 steps:
 - powershell: |
     Write-Host "=============================================="
-    Write-Host "EJECUTA SETUP - VERSION PASSWORD NATIVO V2"
+    Write-Host "EJECUTA SETUP - VERSION PASSWORD THUNDERRT6 V3"
     Write-Host "=============================================="
 
     # ============================================================
@@ -684,18 +684,20 @@ steps:
 
 
     # ============================================================
-    # ESPERAR Y COMPLETAR "Ingrese la contraseña"
+    # COMPLETAR "Ingrese la contraseña" USANDO EL SELECTOR REAL
     #
-    # Flujo:
-    # 1) espera la ventana por título usando Win32
-    # 2) enumera TextBox VB6/ThunderRT6
-    # 3) identifica el Password por ES_PASSWORD
-    # 4) fallback: usa el TextBox vacío / último TextBox
-    # 5) escribe mediante WM_SETTEXT
-    # 6) espera que Aceptar quede habilitado y hace click
+    # Selector confirmado:
+    #
+    # window[Class="ThunderRT6FormDC"][Name="Ingrese la contraseña"]
+    #   > edit[Class="ThunderRT6TextBox"]
+    #
+    # Como Usuario y Contraseña usan la misma clase, se prioriza:
+    # 1) el TextBox que exponga IsPassword=True
+    # 2) el ThunderRT6TextBox cuyo valor esté vacío
+    # 3) el último ThunderRT6TextBox encontrado
     # ============================================================
 
-    function Complete-PasswordDialogNative {
+    function Complete-PasswordDialogThunderRT6 {
         param(
             [Parameter(Mandatory = $true)]
             [string]$Password,
@@ -703,94 +705,342 @@ steps:
             [int]$TimeoutSeconds = 120
         )
 
+        # --------------------------------------------------------
+        # ESPERAR VENTANA EXACTA
+        # --------------------------------------------------------
+
         $ventanaPassword = Wait-WindowGlobal `
             -Title "Ingrese la contraseña" `
             -TimeoutSeconds $TimeoutSeconds
 
         Write-Host ""
         Write-Host "VENTANA DE CONTRASEÑA DETECTADA"
-        Write-Host "Título: $($ventanaPassword.Title)"
-        Write-Host "PID: $($ventanaPassword.ProcessId)"
-        Write-Host "Handle: $($ventanaPassword.Handle)"
+        Write-Host "Título : $($ventanaPassword.Title)"
+        Write-Host "PID    : $($ventanaPassword.ProcessId)"
+        Write-Host "Handle : $($ventanaPassword.Handle)"
 
-        $limite = (Get-Date).AddSeconds(30)
-        $campoPassword = $null
 
-        while (
-            (Get-Date) -lt $limite -and
-            $null -eq $campoPassword
-        ) {
-            $textboxes = @(
-                Get-NativeTextBoxes `
-                    -Window $ventanaPassword
+        # --------------------------------------------------------
+        # CONVERTIR VENTANA WIN32 A UI AUTOMATION
+        # --------------------------------------------------------
+
+        $elementoVentana =
+            [System.Windows.Automation.AutomationElement]::FromHandle(
+                $ventanaPassword.Handle
             )
 
-            # Primer criterio: estilo ES_PASSWORD
-            $campoPassword =
-                $textboxes |
-                Where-Object {
-                    $_.IsPassword -and $_.Enabled
-                } |
-                Select-Object -First 1
-
-            # Segundo criterio: TextBox vacío.
-            # En la pantalla observada el usuario contiene "sa"
-            # y el campo Contraseña está vacío.
-            if ($null -eq $campoPassword) {
-                $campoPassword =
-                    $textboxes |
-                    Where-Object {
-                        $_.Enabled -and
-                        [string]::IsNullOrEmpty($_.Text)
-                    } |
-                    Select-Object -Last 1
-            }
-
-            # Último fallback: último TextBox encontrado.
-            if (
-                $null -eq $campoPassword -and
-                $textboxes.Count -ge 2
-            ) {
-                Write-Warning "No se detectó ES_PASSWORD. Se utilizará el último TextBox nativo."
-
-                $campoPassword =
-                    $textboxes |
-                    Select-Object -Last 1
-            }
-
-            if ($null -eq $campoPassword) {
-                Write-Host "Esperando controles de Usuario/Contraseña..."
-                Start-Sleep -Seconds 1
-            }
+        if ($null -eq $elementoVentana) {
+            throw "No se pudo obtener AutomationElement para la ventana de contraseña."
         }
 
-        if ($null -eq $campoPassword) {
-            throw "Se detectó 'Ingrese la contraseña', pero no se encontró el TextBox de contraseña."
+        $claseVentana =
+            $elementoVentana.Current.ClassName
+
+        Write-Host "Clase ventana detectada: [$claseVentana]"
+        Write-Host "Clase ventana esperada : [ThunderRT6FormDC]"
+
+        if ($claseVentana -ne "ThunderRT6FormDC") {
+            Write-Warning "La clase de la ventana no coincide con ThunderRT6FormDC."
+        }
+
+
+        # --------------------------------------------------------
+        # BUSCAR EXACTAMENTE:
+        # edit[Class="ThunderRT6TextBox"]
+        # --------------------------------------------------------
+
+        $condicionEdit = New-Object `
+            System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                [System.Windows.Automation.ControlType]::Edit
+            )
+
+        $condicionClase = New-Object `
+            System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ClassNameProperty,
+                "ThunderRT6TextBox"
+            )
+
+        $condicionTextBox = New-Object `
+            System.Windows.Automation.AndCondition(
+                $condicionEdit,
+                $condicionClase
+            )
+
+        $limiteTextBox =
+            (Get-Date).AddSeconds(30)
+
+        $textboxes = $null
+
+        while ((Get-Date) -lt $limiteTextBox) {
+
+            $textboxes =
+                $elementoVentana.FindAll(
+                    [System.Windows.Automation.TreeScope]::Descendants,
+                    $condicionTextBox
+                )
+
+            if (
+                $null -ne $textboxes -and
+                $textboxes.Count -gt 0
+            ) {
+                break
+            }
+
+            Write-Host "Esperando controles ThunderRT6TextBox..."
+
+            Start-Sleep -Seconds 1
+        }
+
+        if (
+            $null -eq $textboxes -or
+            $textboxes.Count -eq 0
+        ) {
+            throw "No se encontró ningún edit[Class='ThunderRT6TextBox'] dentro de 'Ingrese la contraseña'."
         }
 
         Write-Host ""
-        Write-Host "CAMPO CONTRASEÑA NATIVO DETECTADO"
-        Write-Host "Clase : $($campoPassword.Class)"
-        Write-Host "Handle: $($campoPassword.Handle)"
-        Write-Host "PasswordStyle: $($campoPassword.IsPassword)"
+        Write-Host "ThunderRT6TextBox encontrados: $($textboxes.Count)"
 
-        # WM_SETTEXT = 0x000C
-        [void][Win32]::SendMessage(
-            $campoPassword.Handle,
-            0x000C,
-            [IntPtr]::Zero,
-            $Password
-        )
 
-        Write-Host "Contraseña enviada al TextBox mediante WM_SETTEXT."
+        # --------------------------------------------------------
+        # ANALIZAR CADA THUNDERRT6TEXTBOX
+        # --------------------------------------------------------
 
-        Start-Sleep -Seconds 1
+        $candidatos =
+            New-Object System.Collections.Generic.List[object]
 
-        # Aceptar está deshabilitado hasta que la contraseña se complete.
+        for ($i = 0; $i -lt $textboxes.Count; $i++) {
+
+            $tb =
+                $textboxes.Item($i)
+
+            $valor = $null
+            $esPassword = $false
+            $nativeHandle = 0
+
+            try {
+                $esPassword =
+                    $tb.Current.IsPassword
+            }
+            catch {
+            }
+
+            try {
+                $nativeHandle =
+                    $tb.Current.NativeWindowHandle
+            }
+            catch {
+            }
+
+            try {
+                $valuePattern =
+                    $tb.GetCurrentPattern(
+                        [System.Windows.Automation.ValuePattern]::Pattern
+                    )
+
+                $valor =
+                    $valuePattern.Current.Value
+            }
+            catch {
+                $valor = $null
+            }
+
+            # No imprimir una eventual contraseña.
+            $valorLog = ""
+
+            if ($i -eq 0 -and $valor) {
+                $valorLog = $valor
+            }
+            elseif ([string]::IsNullOrEmpty($valor)) {
+                $valorLog = "<vacío>"
+            }
+            else {
+                $valorLog = "<con contenido>"
+            }
+
+            Write-Host "TextBox #$i"
+            Write-Host "  Clase       : [$($tb.Current.ClassName)]"
+            Write-Host "  Handle      : [$nativeHandle]"
+            Write-Host "  IsPassword  : [$esPassword]"
+            Write-Host "  Valor       : [$valorLog]"
+
+            $candidatos.Add(
+                [PSCustomObject]@{
+                    Index        = $i
+                    Element      = $tb
+                    Value        = $valor
+                    IsPassword   = $esPassword
+                    NativeHandle = $nativeHandle
+                }
+            )
+        }
+
+
+        # --------------------------------------------------------
+        # IDENTIFICAR EL CAMPO CONTRASEÑA
+        # --------------------------------------------------------
+
+        $campoPassword =
+            $candidatos |
+            Where-Object {
+                $_.IsPassword
+            } |
+            Select-Object -First 1
+
+        if ($null -eq $campoPassword) {
+
+            Write-Host "IsPassword no permitió identificar el campo."
+            Write-Host "Buscando ThunderRT6TextBox vacío..."
+
+            $campoPassword =
+                $candidatos |
+                Where-Object {
+                    [string]::IsNullOrEmpty($_.Value)
+                } |
+                Select-Object -Last 1
+        }
+
+        if (
+            $null -eq $campoPassword -and
+            $candidatos.Count -ge 2
+        ) {
+
+            Write-Warning "No se pudo distinguir por valor. Se utilizará el último ThunderRT6TextBox."
+
+            $campoPassword =
+                $candidatos |
+                Select-Object -Last 1
+        }
+
+        if ($null -eq $campoPassword) {
+            throw "No se pudo identificar el ThunderRT6TextBox correspondiente a Contraseña."
+        }
+
+
+        Write-Host ""
+        Write-Host "CAMPO CONTRASEÑA SELECCIONADO"
+        Write-Host "Índice : $($campoPassword.Index)"
+        Write-Host "Clase  : [ThunderRT6TextBox]"
+        Write-Host "Handle : $($campoPassword.NativeHandle)"
+
+
+        # --------------------------------------------------------
+        # MÉTODO 1:
+        # PEGAR DIRECTAMENTE EN EL HANDLE EXACTO CON WM_PASTE
+        #
+        # WM_PASTE = 0x0302
+        # Esto apunta al ThunderRT6TextBox específico y evita
+        # depender del foco global de Windows.
+        # --------------------------------------------------------
+
+        $ingresada = $false
+
+        if ($campoPassword.NativeHandle -ne 0) {
+
+            try {
+
+                Write-Host "Intentando ingresar contraseña mediante WM_PASTE al ThunderRT6TextBox..."
+
+                Set-Clipboard `
+                    -Value $Password
+
+                [void][Win32]::SendMessage(
+                    [IntPtr]$campoPassword.NativeHandle,
+                    0x0302,
+                    [IntPtr]::Zero,
+                    [IntPtr]::Zero
+                )
+
+                Start-Sleep -Seconds 1
+
+                $ingresada = $true
+
+                Write-Host "WM_PASTE enviado al ThunderRT6TextBox."
+            }
+            catch {
+
+                Write-Warning "No fue posible usar WM_PASTE: $($_.Exception.Message)"
+            }
+            finally {
+
+                Set-Clipboard -Value ""
+            }
+        }
+
+
+        # --------------------------------------------------------
+        # COMPROBAR SI ACEPTAR SE HABILITÓ.
+        # SI NO, USAR FOCO + CTRL+V COMO SEGUNDO MÉTODO.
+        # --------------------------------------------------------
+
+        $botonAceptar =
+            Get-NativeButtonByName `
+                -Window $ventanaPassword `
+                -ButtonName "Aceptar"
+
+        if (
+            $null -eq $botonAceptar -or
+            -not $botonAceptar.Enabled
+        ) {
+
+            Write-Warning "Aceptar todavía no está habilitado."
+            Write-Host "Intentando ingreso mediante foco directo + CTRL+V..."
+
+            Activate-Window `
+                -Window $ventanaPassword
+
+            try {
+
+                $campoPassword.Element.SetFocus()
+
+                Start-Sleep -Milliseconds 500
+
+                # Limpiar cualquier valor previo.
+                Send-KeySafe `
+                    -Keys "^a" `
+                    -Description "seleccionar contenido del campo contraseña"
+
+                Set-Clipboard `
+                    -Value $Password
+
+                try {
+
+                    Send-KeySafe `
+                        -Keys "^v" `
+                        -Description "pegar contraseña en ThunderRT6TextBox"
+                }
+                finally {
+
+                    Start-Sleep -Milliseconds 500
+                    Set-Clipboard -Value ""
+                }
+
+                $ingresada = $true
+            }
+            catch {
+
+                throw "Se encontró ThunderRT6TextBox pero no se pudo completar la contraseña: $($_.Exception.Message)"
+            }
+        }
+
+
+        if (-not $ingresada) {
+            throw "No fue posible ingresar la contraseña en ThunderRT6TextBox."
+        }
+
+
+        # --------------------------------------------------------
+        # ESPERAR QUE ACEPTAR SE HABILITE Y HACER CLICK
+        # --------------------------------------------------------
+
+        Write-Host ""
+        Write-Host "Esperando que el botón Aceptar quede habilitado..."
+
         Click-ButtonByName `
             -Window $ventanaPassword `
             -ButtonName "Aceptar" `
-            -TimeoutSeconds 30 `
+            -TimeoutSeconds 60 `
             -PollSeconds 1
 
         Write-Host "Contraseña confirmada correctamente."
@@ -948,7 +1198,7 @@ steps:
     # directamente con controles Win32 nativos.
     # ============================================================
 
-    Complete-PasswordDialogNative `
+    Complete-PasswordDialogThunderRT6 `
         -Password $env:SETUP_PASSWORD `
         -TimeoutSeconds 120
 
