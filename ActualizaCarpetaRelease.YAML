@@ -18,7 +18,9 @@ steps:
         "\\SARDT4001\Release",
         "\\SARDT4000\Release",
         "\\SARTES502022\Release",
-        "\\SARTES042022\Release"
+        "\\SARTES042022\Release",
+        "\\SARDT2502\Release"
+    
     )
 
 
