@@ -711,7 +711,7 @@ steps:
         # --------------------------------------------------------
         # ESPERAR LA VENTANA DE CONTRASEÑA
         # --------------------------------------------------------
-
+        Write-Host "VENTANA DE CONTRASEÑA DETECTADA mmmm"
         $ventanaPassword = Wait-WindowGlobal `
             -Title "Ingrese la contraseña" `
             -TimeoutSeconds $TimeoutSeconds
