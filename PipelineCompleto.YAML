@@ -23,15 +23,6 @@ stages:
     steps:
     - template: ActualizaCarpetaRelease.YAML
 
-  - job: ActualizarRelease_QA02
-    displayName: Actualizar Setup SAR y OFISIS en QA-02
-    pool:
-      name: Softland-QA
-      demands:
-      - Agent.OS -equals Windows_NT
-      - Agent.Name -equals Softland-QA-02
-    steps:
-    - template: ActualizaCarpetaRelease.YAML
 
 - stage: EjecutaSetup
   displayName: 02 - Ejecutar Setup
