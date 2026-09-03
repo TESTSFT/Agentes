@@ -75,9 +75,7 @@ jobs:
             public const uint WM_COMMAND = 0x0111;
             public const uint WM_INITMENUPOPUP = 0x0117;
             public const uint WM_SETTEXT = 0x000C;
-
             public const uint BM_CLICK = 0x00F5;
-
             public const uint MF_BYPOSITION = 0x00000400;
 
             public delegate bool EnumWindowsProc(
@@ -156,9 +154,24 @@ jobs:
             );
 
 
+            #region TEXT
+
+
             [DllImport(
                 "user32.dll",
-                CharSet = CharSet.Auto
+                CharSet = CharSet.Auto,
+                SetLastError = true
+            )]
+            public static extern bool SetWindowText(
+                IntPtr hWnd,
+                string lpString
+            );
+
+
+            [DllImport(
+                "user32.dll",
+                CharSet = CharSet.Auto,
+                EntryPoint = "SendMessage"
             )]
             static extern IntPtr SendMessageText(
                 IntPtr hWnd,
@@ -166,6 +179,9 @@ jobs:
                 IntPtr wParam,
                 string lParam
             );
+
+
+            #endregion
 
 
             [DllImport("user32.dll")]
@@ -198,6 +214,12 @@ jobs:
 
             [DllImport("user32.dll")]
             public static extern bool IsWindow(
+                IntPtr hWnd
+            );
+
+
+            [DllImport("user32.dll")]
+            public static extern bool IsWindowEnabled(
                 IntPtr hWnd
             );
 
@@ -494,15 +516,6 @@ jobs:
             }
 
 
-            // =======================================================
-            // IMPORTANTE:
-            //
-            // CLICK ASINCRONICO.
-            //
-            // PostMessage evita que PowerShell quede bloqueado
-            // mientras Softland abre una ventana modal.
-            // =======================================================
-
             public static bool ClickAsync(
                 IntPtr hWnd
             )
@@ -511,7 +524,9 @@ jobs:
                     hWnd == IntPtr.Zero ||
                     !IsWindow(hWnd)
                 )
+                {
                     return false;
+                }
 
                 return PostMessage(
                     hWnd,
@@ -522,6 +537,15 @@ jobs:
             }
 
 
+            // =======================================================
+            // CARGAR TEXTO
+            //
+            // 1) SetWindowText
+            // 2) Fallback SendMessage -> WM_SETTEXT
+            //
+            // El EntryPoint correcto es SendMessage.
+            // =======================================================
+
             public static bool SetTextValue(
                 IntPtr hWnd,
                 string value
@@ -531,7 +555,20 @@ jobs:
                     hWnd == IntPtr.Zero ||
                     !IsWindow(hWnd)
                 )
+                {
                     return false;
+                }
+
+                bool ok =
+                    SetWindowText(
+                        hWnd,
+                        value
+                    );
+
+                if (ok)
+                {
+                    return true;
+                }
 
                 SendMessageText(
                     hWnd,
@@ -732,7 +769,9 @@ jobs:
                     IntPtr.Zero
                 )
                 {
-                    CloseHandle(process);
+                    CloseHandle(
+                        process
+                    );
 
                     return false;
                 }
@@ -765,7 +804,9 @@ jobs:
                     MEM_RELEASE
                 );
 
-                CloseHandle(process);
+                CloseHandle(
+                    process
+                );
 
                 return result;
             }
@@ -779,7 +820,9 @@ jobs:
 
         function Normalize-Text {
 
-            param([string]$Text)
+            param(
+                [string]$Text
+            )
 
             if ($null -eq $Text) {
                 return ""
@@ -792,7 +835,8 @@ jobs:
                 ).Trim().ToLowerInvariant()
 
             if ($Text.Contains("`t")) {
-                $Text = $Text.Split("`t")[0]
+                $Text =
+                    $Text.Split("`t")[0]
             }
 
             $Normalized =
@@ -1028,15 +1072,18 @@ jobs:
                 throw "No se encontro boton: $($Names -join ', ')"
             }
 
+
             $Text =
                 [NativeUI]::Text(
                     $Button
                 )
 
+
             $Class =
                 [NativeUI]::ClassName(
                     $Button
                 )
+
 
             Write-Host "[INFO] Boton detectado:"
             Write-Host "       Texto  : $Text"
@@ -1054,6 +1101,7 @@ jobs:
 
                 throw "No fue posible enviar click asincronico a $Text."
             }
+
 
             return $Button
         }
@@ -1110,6 +1158,53 @@ jobs:
         }
 
 
+        function Wait-ButtonEnabled {
+
+            param(
+                [IntPtr]$Window,
+                [string[]]$Names,
+                [int]$TimeoutSeconds = 15
+            )
+
+            $End =
+                (Get-Date).AddSeconds(
+                    $TimeoutSeconds
+                )
+
+            while (
+                (Get-Date) -lt $End
+            ) {
+
+                $Button =
+                    Find-Button `
+                        -Window $Window `
+                        -Names $Names
+
+
+                if (
+                    $Button -ne
+                    [IntPtr]::Zero
+                ) {
+
+                    if (
+                        [NativeUI]::IsWindowEnabled(
+                            $Button
+                        )
+                    ) {
+
+                        return $Button
+                    }
+                }
+
+
+                Start-Sleep -Milliseconds 250
+            }
+
+
+            return [IntPtr]::Zero
+        }
+
+
         function Set-Password {
 
             param(
@@ -1121,10 +1216,12 @@ jobs:
                 [NativeUI]::FindChildClass(
                     $Dialog,
                     @(
+                        "ThunderRT6TextBox",
                         "TextBox",
                         "Edit"
                     )
                 )
+
 
             if (
                 $Edit -eq
@@ -1134,25 +1231,43 @@ jobs:
                 return $false
             }
 
+
             Write-Host "[INFO] Campo contraseña detectado."
             Write-Host "[INFO] Clase: $([NativeUI]::ClassName($Edit))"
+            Write-Host "[INFO] Handle: $Edit"
 
-            return [NativeUI]::SetTextValue(
-                $Edit,
-                $Value
-            )
+
+            $Result =
+                [NativeUI]::SetTextValue(
+                    $Edit,
+                    $Value
+                )
+
+
+            if (
+                -not $Result
+            ) {
+
+                return $false
+            }
+
+
+            Start-Sleep -Milliseconds 700
+
+
+            return $true
         }
 
 
         # ============================================================
-        # PROCESO
+        # PROCESO PRINCIPAL
         # ============================================================
 
         try {
 
 
             # ========================================================
-            # 1 - CWCONFIG
+            # 1 - BUSCAR CWCONFIG
             # ========================================================
 
             Write-Host "[1] Buscando cwConfig.exe..."
@@ -1555,7 +1670,6 @@ jobs:
             }
 
 
-            # ESTA LINEA AHORA SI DEBE APARECER
             Write-Host "[OK] Click asincronico enviado a Convertir."
 
 
@@ -1595,13 +1709,14 @@ jobs:
             Write-Host "     $TextoGeneral"
 
 
-            $YesGeneral =
+            [void](
                 Click-ButtonAsync `
                     -Window $General `
                     -Names @(
                         "Si",
                         "Sí"
                     )
+            )
 
 
             Write-Host "[OK] Click asincronico enviado a Si."
@@ -1618,7 +1733,7 @@ jobs:
 
 
             # ========================================================
-            # 8 - EMPRESAS
+            # 8 - PROCESAR EMPRESAS
             # ========================================================
 
             $Convertidas = 0
@@ -1638,7 +1753,7 @@ jobs:
 
 
                 # ====================================================
-                # PASSWORD
+                # CONTRASEÑA
                 # ====================================================
 
                 Write-Host "[INFO] Esperando Ingrese contraseña..."
@@ -1678,18 +1793,50 @@ jobs:
                 }
 
 
-                Write-Host "[OK] Contraseña ingresada."
-                Write-Host "[INFO] El valor secreto no se muestra."
+                Write-Host "[OK] Contraseña cargada en ThunderRT6TextBox."
+                Write-Host "[INFO] El valor secreto NO se muestra en el log."
 
 
-                [void](
-                    Click-ButtonAsync `
+                # ====================================================
+                # ESPERAR QUE ACEPTAR SE HABILITE
+                # ====================================================
+
+                Write-Host "[INFO] Esperando que Aceptar quede habilitado..."
+
+
+                $Aceptar =
+                    Wait-ButtonEnabled `
                         -Window $PasswordDialog `
                         -Names @(
                             "Aceptar",
                             "OK"
+                        ) `
+                        -TimeoutSeconds 15
+
+
+                if (
+                    $Aceptar -eq
+                    [IntPtr]::Zero
+                ) {
+
+                    throw "La contraseña fue cargada pero el boton Aceptar no se habilito."
+                }
+
+
+                Write-Host "[OK] Boton Aceptar habilitado."
+                Write-Host "[INFO] Presionando Aceptar..."
+
+
+                if (
+                    -not (
+                        [NativeUI]::ClickAsync(
+                            $Aceptar
                         )
-                )
+                    )
+                ) {
+
+                    throw "No fue posible presionar Aceptar."
+                }
 
 
                 Write-Host "[OK] Aceptar enviado."
@@ -1706,7 +1853,7 @@ jobs:
 
 
                 # ====================================================
-                # SI 1
+                # PRIMER SI
                 # ====================================================
 
                 Write-Host "[INFO] Esperando primera confirmacion posterior..."
@@ -1758,7 +1905,7 @@ jobs:
 
 
                 # ====================================================
-                # SI 2
+                # SEGUNDO SI
                 # ====================================================
 
                 Write-Host "[INFO] Esperando segunda confirmacion posterior..."
@@ -1961,6 +2108,7 @@ jobs:
             Write-Host "=========================================================="
             Write-Host ""
 
+
             exit 0
         }
 
@@ -1994,6 +2142,7 @@ jobs:
             if ($Procesos) {
 
                 Write-Host "[DEBUG] cwConfig.exe continua abierto."
+
 
                 foreach (
                     $Proceso in
