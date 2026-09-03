@@ -525,12 +525,9 @@ jobs:
 
         if ($CheckBoxes.Count -eq 0) {
 
-            throw @"
-No se detectaron los checkbox de empresas.
-
-Esto significa que la grilla de esta versión de Softland
-no está exponiendo los controles mediante UI Automation.
-"@
+                   if ($CheckBoxes.Count -eq 0) {
+            throw "No se detectaron los checkbox de empresas. La grilla de esta versión de Softland no está exponiendo los controles mediante UI Automation."
+        }
         }
 
 
