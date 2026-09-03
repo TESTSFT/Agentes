@@ -1,0 +1,831 @@
+trigger: none
+
+pool:
+  name: Softland-QA
+  demands:
+    - Agent.OS -equals Windows_NT
+
+jobs:
+- job: ConvertirEmpresasSoftland
+  displayName: "Convertir empresas Softland"
+  timeoutInMinutes: 180
+
+  steps:
+
+  - checkout: self
+
+  - task: PowerShell@2
+    displayName: "Detectar y convertir empresas"
+    env:
+      SOFTLAND_PASSWORD: $(SOFTLAND_PASSWORD)
+
+    inputs:
+      targetType: inline
+      pwsh: false
+      script: |
+
+        $ErrorActionPreference = "Stop"
+
+        $Password = $env:SOFTLAND_PASSWORD
+
+        if ([string]::IsNullOrWhiteSpace($Password)) {
+            throw "No se encontró SOFTLAND_PASSWORD."
+        }
+
+        Write-Host "=============================================="
+        Write-Host " AGENTES QA - CONVERSION AUTOMATICA SOFTLAND"
+        Write-Host "=============================================="
+        Write-Host "Servidor : $env:COMPUTERNAME"
+        Write-Host "Usuario  : $env:USERNAME"
+        Write-Host ""
+
+        Add-Type -AssemblyName UIAutomationClient
+        Add-Type -AssemblyName UIAutomationTypes
+
+        Add-Type @"
+        using System;
+        using System.Runtime.InteropServices;
+
+        public class Win32
+        {
+            [DllImport("user32.dll")]
+            public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+            [DllImport("user32.dll")]
+            public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+
+            [DllImport("user32.dll")]
+            public static extern bool SetCursorPos(int X, int Y);
+
+            [DllImport("user32.dll")]
+            public static extern void mouse_event(
+                uint dwFlags,
+                uint dx,
+                uint dy,
+                uint dwData,
+                UIntPtr dwExtraInfo
+            );
+        }
+        "@
+
+
+        # ============================================================
+        # FUNCIONES GENERALES
+        # ============================================================
+
+        function Normalize-Text {
+
+            param([string]$Text)
+
+            if ($null -eq $Text) {
+                return ""
+            }
+
+            $Text = $Text.Replace("&","").Trim().ToLowerInvariant()
+
+            $normalized = $Text.Normalize(
+                [Text.NormalizationForm]::FormD
+            )
+
+            $builder = New-Object Text.StringBuilder
+
+            foreach ($char in $normalized.ToCharArray()) {
+
+                $category =
+                    [Globalization.CharUnicodeInfo]::GetUnicodeCategory($char)
+
+                if (
+                    $category -ne
+                    [Globalization.UnicodeCategory]::NonSpacingMark
+                ) {
+                    [void]$builder.Append($char)
+                }
+            }
+
+            return $builder.ToString()
+        }
+
+
+        function Get-Descendants {
+
+            param(
+                [System.Windows.Automation.AutomationElement]$Root
+            )
+
+            return $Root.FindAll(
+                [System.Windows.Automation.TreeScope]::Descendants,
+                [System.Windows.Automation.Condition]::TrueCondition
+            )
+        }
+
+
+        function Get-Element {
+
+            param(
+                [System.Windows.Automation.AutomationElement]$Root,
+                [string[]]$Names
+            )
+
+            foreach ($element in (Get-Descendants -Root $Root)) {
+
+                try {
+
+                    $name = Normalize-Text $element.Current.Name
+
+                    foreach ($wanted in $Names) {
+
+                        if (
+                            $name -eq
+                            (Normalize-Text $wanted)
+                        ) {
+                            return $element
+                        }
+                    }
+                }
+                catch {
+                }
+            }
+
+            return $null
+        }
+
+
+        function Click-Element {
+
+            param(
+                [System.Windows.Automation.AutomationElement]$Element
+            )
+
+            if (-not $Element) {
+                throw "No existe el elemento que se intenta seleccionar."
+            }
+
+            try {
+
+                $invoke = $Element.GetCurrentPattern(
+                    [System.Windows.Automation.InvokePattern]::Pattern
+                )
+
+                $invoke.Invoke()
+                return
+            }
+            catch {
+            }
+
+            try {
+
+                $legacy = $Element.GetCurrentPattern(
+                    [System.Windows.Automation.LegacyIAccessiblePattern]::Pattern
+                )
+
+                $legacy.DoDefaultAction()
+                return
+            }
+            catch {
+            }
+
+            $rect = $Element.Current.BoundingRectangle
+
+            $x = [int]($rect.Left + ($rect.Width / 2))
+            $y = [int]($rect.Top + ($rect.Height / 2))
+
+            [Win32]::SetCursorPos($x,$y) | Out-Null
+
+            Start-Sleep -Milliseconds 250
+
+            [Win32]::mouse_event(
+                0x0002,0,0,0,[UIntPtr]::Zero
+            )
+
+            [Win32]::mouse_event(
+                0x0004,0,0,0,[UIntPtr]::Zero
+            )
+        }
+
+
+        function Get-WindowText {
+
+            param(
+                [System.Windows.Automation.AutomationElement]$Window
+            )
+
+            $texts = @()
+
+            try {
+                $texts += $Window.Current.Name
+            }
+            catch {
+            }
+
+            foreach ($element in (Get-Descendants -Root $Window)) {
+
+                try {
+
+                    if (
+                        -not [string]::IsNullOrWhiteSpace(
+                            $element.Current.Name
+                        )
+                    ) {
+                        $texts += $element.Current.Name
+                    }
+                }
+                catch {
+                }
+            }
+
+            return ($texts -join " ")
+        }
+
+
+        function Get-Dialogs {
+
+            param(
+                [int]$ProcessId,
+                [int64]$MainHandle
+            )
+
+            $root =
+                [System.Windows.Automation.AutomationElement]::RootElement
+
+            $windows = $root.FindAll(
+                [System.Windows.Automation.TreeScope]::Children,
+                [System.Windows.Automation.Condition]::TrueCondition
+            )
+
+            $result = @()
+
+            foreach ($window in $windows) {
+
+                try {
+
+                    if (
+                        $window.Current.ProcessId -eq $ProcessId -and
+                        $window.Current.NativeWindowHandle -ne $MainHandle -and
+                        -not $window.Current.IsOffscreen
+                    ) {
+                        $result += $window
+                    }
+                }
+                catch {
+                }
+            }
+
+            return @($result)
+        }
+
+
+        function Wait-Dialog {
+
+            param(
+                [int]$ProcessId,
+                [int64]$MainHandle,
+                [scriptblock]$Condition,
+                [int]$TimeoutSeconds = 60
+            )
+
+            $end = (Get-Date).AddSeconds($TimeoutSeconds)
+
+            while ((Get-Date) -lt $end) {
+
+                foreach (
+                    $dialog in
+                    (Get-Dialogs `
+                        -ProcessId $ProcessId `
+                        -MainHandle $MainHandle)
+                ) {
+
+                    try {
+
+                        if (& $Condition $dialog) {
+                            return $dialog
+                        }
+                    }
+                    catch {
+                    }
+                }
+
+                Start-Sleep -Milliseconds 500
+            }
+
+            return $null
+        }
+
+
+        function Get-YesButton {
+
+            param($Window)
+
+            return Get-Element `
+                -Root $Window `
+                -Names @(
+                    "Sí",
+                    "Si",
+                    "&Sí",
+                    "&Si"
+                )
+        }
+
+
+        function Get-OkButton {
+
+            param($Window)
+
+            return Get-Element `
+                -Root $Window `
+                -Names @(
+                    "OK",
+                    "Aceptar",
+                    "&Aceptar"
+                )
+        }
+
+
+        function Set-Password {
+
+            param(
+                $Window,
+                [string]$Password
+            )
+
+            foreach ($element in (Get-Descendants -Root $Window)) {
+
+                try {
+
+                    if (
+                        $element.Current.ControlType -eq
+                        [System.Windows.Automation.ControlType]::Edit
+                    ) {
+
+                        try {
+
+                            $valuePattern =
+                                $element.GetCurrentPattern(
+                                    [System.Windows.Automation.ValuePattern]::Pattern
+                                )
+
+                            $valuePattern.SetValue($Password)
+
+                            return $true
+                        }
+                        catch {
+                        }
+                    }
+                }
+                catch {
+                }
+            }
+
+            return $false
+        }
+
+
+        # ============================================================
+        # LOCALIZAR CONFIG.EXE DEL SERVIDOR ACTUAL
+        # ============================================================
+
+        Write-Host "[1] Buscando Config.exe..."
+
+        $PossiblePaths = @(
+            "C:\Program Files (x86)\Softland\Cliente\Config.exe",
+            "C:\Program Files\Softland\Cliente\Config.exe"
+        )
+
+        $ConfigExe = $null
+
+        foreach ($Path in $PossiblePaths) {
+
+            if (Test-Path $Path) {
+                $ConfigExe = $Path
+                break
+            }
+        }
+
+        if (-not $ConfigExe) {
+            throw "No se encontró Config.exe en este servidor."
+        }
+
+        Write-Host "[OK] $ConfigExe"
+
+
+        # ============================================================
+        # ABRIR CONFIGURACION
+        # ============================================================
+
+        Write-Host ""
+        Write-Host "[2] Abriendo Configuración de Softland..."
+
+        Start-Process -FilePath $ConfigExe | Out-Null
+
+
+        # ============================================================
+        # DETECTAR VENTANA PRINCIPAL
+        # ============================================================
+
+        $MainWindow = $null
+        $timeout = (Get-Date).AddSeconds(60)
+
+        while ((Get-Date) -lt $timeout) {
+
+            $root =
+                [System.Windows.Automation.AutomationElement]::RootElement
+
+            $windows = $root.FindAll(
+                [System.Windows.Automation.TreeScope]::Children,
+                [System.Windows.Automation.Condition]::TrueCondition
+            )
+
+            foreach ($window in $windows) {
+
+                try {
+
+                    $title =
+                        Normalize-Text $window.Current.Name
+
+                    if (
+                        $title -like "*configuracion del sistema de gestion*" -or
+                        $title -like "*configuracion de softland*"
+                    ) {
+
+                        $MainWindow = $window
+                        break
+                    }
+                }
+                catch {
+                }
+            }
+
+            if ($MainWindow) {
+                break
+            }
+
+            Start-Sleep -Seconds 1
+        }
+
+        if (-not $MainWindow) {
+            throw "No se encontró la ventana principal."
+        }
+
+
+        $MainHandle =
+            [int64]$MainWindow.Current.NativeWindowHandle
+
+        $SoftlandProcessId =
+            $MainWindow.Current.ProcessId
+
+
+        Write-Host "[OK] Configuración abierta."
+
+
+        # ============================================================
+        # ABRIR EMPRESAS
+        # ============================================================
+
+        Write-Host ""
+        Write-Host "[3] Abriendo Empresas..."
+
+        $EmpresasButton =
+            Get-Element `
+                -Root $MainWindow `
+                -Names @("Empresas")
+
+        if (-not $EmpresasButton) {
+            throw "No se encontró Empresas."
+        }
+
+        Click-Element $EmpresasButton
+
+        Start-Sleep -Seconds 2
+
+
+        # ============================================================
+        # DESCUBRIR TODAS LAS EMPRESAS
+        # ============================================================
+
+        Write-Host ""
+        Write-Host "[4] Detectando empresas existentes..."
+
+        $CheckBoxes = @()
+
+        foreach ($element in (Get-Descendants -Root $MainWindow)) {
+
+            try {
+
+                if (
+                    $element.Current.ControlType -eq
+                    [System.Windows.Automation.ControlType]::CheckBox
+                ) {
+
+                    $CheckBoxes += $element
+                }
+            }
+            catch {
+            }
+        }
+
+
+        if ($CheckBoxes.Count -eq 0) {
+
+            throw @"
+No se detectaron los checkbox de empresas.
+
+Esto significa que la grilla de esta versión de Softland
+no está exponiendo los controles mediante UI Automation.
+"@
+        }
+
+
+        Write-Host "[INFO] Checkbox detectados: $($CheckBoxes.Count)"
+
+
+        # ============================================================
+        # MARCAR TODAS
+        # ============================================================
+
+        Write-Host ""
+        Write-Host "[5] Seleccionando todas las empresas..."
+
+        $Selected = 0
+
+        foreach ($CheckBox in $CheckBoxes) {
+
+            try {
+
+                $toggle =
+                    $CheckBox.GetCurrentPattern(
+                        [System.Windows.Automation.TogglePattern]::Pattern
+                    )
+
+                if (
+                    $toggle.Current.ToggleState -ne
+                    [System.Windows.Automation.ToggleState]::On
+                ) {
+
+                    $toggle.Toggle()
+                }
+
+                $Selected++
+            }
+            catch {
+            }
+        }
+
+
+        Write-Host "[OK] Empresas marcadas: $Selected"
+
+        if ($Selected -eq 0) {
+            throw "No fue posible seleccionar ninguna empresa."
+        }
+
+
+        # ============================================================
+        # CONVERTIR
+        # ============================================================
+
+        Write-Host ""
+        Write-Host "[6] Presionando Convertir..."
+
+        $Convertir =
+            Get-Element `
+                -Root $MainWindow `
+                -Names @(
+                    "Convertir",
+                    "&Convertir"
+                )
+
+        if (-not $Convertir) {
+            throw "No se encontró Convertir."
+        }
+
+        Click-Element $Convertir
+
+
+        # ============================================================
+        # PROCESAMIENTO DINAMICO
+        # ============================================================
+
+        $ConvertedCount = 0
+
+        while ($true) {
+
+            Write-Host ""
+            Write-Host "----------------------------------------------"
+            Write-Host " Esperando siguiente conversión"
+            Write-Host "----------------------------------------------"
+
+
+            # ========================================================
+            # ESPERAR PREGUNTA DE CONVERSION
+            # ========================================================
+
+            $Confirm = Wait-Dialog `
+                -ProcessId $SoftlandProcessId `
+                -MainHandle $MainHandle `
+                -TimeoutSeconds 15 `
+                -Condition {
+
+                    param($dialog)
+
+                    $text =
+                        Normalize-Text (
+                            Get-WindowText $dialog
+                        )
+
+                    return (
+                        $text -like "*convertir*" -and
+                        $text -like "*empresa*"
+                    )
+                }
+
+
+            # ========================================================
+            # SI NO HAY MAS CONFIRMACIONES:
+            # TERMINAMOS
+            # ========================================================
+
+            if (-not $Confirm) {
+
+                Write-Host ""
+                Write-Host "[INFO] No existen más empresas pendientes."
+                break
+            }
+
+
+            $ConfirmText =
+                Get-WindowText $Confirm
+
+            Write-Host "[INFO] Softland informa:"
+            Write-Host "       $ConfirmText"
+
+
+            $Yes =
+                Get-YesButton $Confirm
+
+            if (-not $Yes) {
+                throw "No se encontró Sí en confirmación de empresa."
+            }
+
+            Click-Element $Yes
+
+
+            # ========================================================
+            # CONTRASEÑA
+            # ========================================================
+
+            $PasswordDialog = Wait-Dialog `
+                -ProcessId $SoftlandProcessId `
+                -MainHandle $MainHandle `
+                -TimeoutSeconds 60 `
+                -Condition {
+
+                    param($dialog)
+
+                    $text =
+                        Normalize-Text (
+                            Get-WindowText $dialog
+                        )
+
+                    return (
+                        $text -like "*contrasena*" -or
+                        $text -like "*password*"
+                    )
+                }
+
+
+            if ($PasswordDialog) {
+
+                Write-Host "[INFO] Ingresando contraseña..."
+
+                if (
+                    -not (
+                        Set-Password `
+                            -Window $PasswordDialog `
+                            -Password $Password
+                    )
+                ) {
+                    throw "No se pudo ingresar la contraseña."
+                }
+
+
+                $Aceptar =
+                    Get-OkButton $PasswordDialog
+
+                if (-not $Aceptar) {
+                    throw "No se encontró Aceptar."
+                }
+
+                Click-Element $Aceptar
+            }
+
+
+            # ========================================================
+            # DOS CONFIRMACIONES
+            # ========================================================
+
+            for ($i = 1; $i -le 2; $i++) {
+
+                Write-Host "[INFO] Esperando confirmación $i..."
+
+                $Dialog = Wait-Dialog `
+                    -ProcessId $SoftlandProcessId `
+                    -MainHandle $MainHandle `
+                    -TimeoutSeconds 120 `
+                    -Condition {
+
+                        param($dialog)
+
+                        return (
+                            $null -ne
+                            (Get-YesButton $dialog)
+                        )
+                    }
+
+                if (-not $Dialog) {
+                    throw "No apareció confirmación $i."
+                }
+
+
+                $Si =
+                    Get-YesButton $Dialog
+
+                Click-Element $Si
+
+                Write-Host "[OK] Confirmación $i aceptada."
+            }
+
+
+            # ========================================================
+            # ESPERAR FINALIZACION
+            # ========================================================
+
+            Write-Host "[INFO] Conversión en curso..."
+
+            $Finish = Wait-Dialog `
+                -ProcessId $SoftlandProcessId `
+                -MainHandle $MainHandle `
+                -TimeoutSeconds 1800 `
+                -Condition {
+
+                    param($dialog)
+
+                    $text =
+                        Normalize-Text (
+                            Get-WindowText $dialog
+                        )
+
+                    return (
+                        $text -like "*finaliz*" -and
+                        (
+                            $text -like "*convers*" -or
+                            $text -like "*convert*"
+                        )
+                    )
+                }
+
+
+            if (-not $Finish) {
+
+                throw "La conversión no informó finalización."
+            }
+
+
+            $ConvertedCount++
+
+            Write-Host ""
+            Write-Host "[OK] Empresa convertida."
+            Write-Host "[INFO] Total procesadas: $ConvertedCount"
+
+
+            # ========================================================
+            # OK DE FINALIZACION
+            #
+            # ESTE OK HACE QUE SOFTLAND PASE AUTOMATICAMENTE
+            # A LA SIGUIENTE EMPRESA.
+            # ========================================================
+
+            $OK =
+                Get-OkButton $Finish
+
+            if (-not $OK) {
+                throw "No se encontró OK al finalizar."
+            }
+
+            Click-Element $OK
+
+            Start-Sleep -Seconds 2
+        }
+
+
+        # ============================================================
+        # FINAL
+        # ============================================================
+
+        Write-Host ""
+        Write-Host "=============================================="
+        Write-Host " PROCESO FINALIZADO"
+        Write-Host "=============================================="
+        Write-Host ""
+        Write-Host "Servidor           : $env:COMPUTERNAME"
+        Write-Host "Empresas procesadas: $ConvertedCount"
+        Write-Host ""
+
+        exit 0
