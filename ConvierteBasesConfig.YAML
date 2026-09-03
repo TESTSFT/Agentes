@@ -23,7 +23,6 @@ jobs:
 
   - task: PowerShell@2
     displayName: "Convertir empresas Softland"
-
     env:
       SOFTLAND_PASSWORD: $(SOFTLAND_PASSWORD)
       DEBUG_PAUSE_MINUTES: ${{ parameters.debugPauseMinutes }}
@@ -31,7 +30,6 @@ jobs:
     inputs:
       targetType: inline
       pwsh: false
-
       script: |
 
         $ErrorActionPreference = "Stop"
@@ -63,24 +61,36 @@ jobs:
 
 
         # ============================================================
-        # WIN32 / MENU NATIVO
+        # WIN32 - MENU Y CONTROLES
         # ============================================================
 
         Add-Type @"
         using System;
         using System.Text;
+        using System.Collections.Generic;
         using System.Runtime.InteropServices;
 
-        public static class NativeWindows
+        public static class NativeUI
         {
             public const uint WM_COMMAND = 0x0111;
             public const uint WM_INITMENUPOPUP = 0x0117;
+            public const uint WM_SETTEXT = 0x000C;
+
+            public const uint BM_CLICK = 0x00F5;
+
             public const uint MF_BYPOSITION = 0x00000400;
+
+            public delegate bool EnumWindowsProc(
+                IntPtr hWnd,
+                IntPtr lParam
+            );
+
 
             [DllImport("user32.dll")]
             public static extern bool SetForegroundWindow(
                 IntPtr hWnd
             );
+
 
             [DllImport("user32.dll")]
             public static extern bool ShowWindowAsync(
@@ -88,15 +98,18 @@ jobs:
                 int nCmdShow
             );
 
+
             [DllImport("user32.dll")]
             public static extern IntPtr GetMenu(
                 IntPtr hWnd
             );
 
+
             [DllImport("user32.dll")]
             public static extern int GetMenuItemCount(
                 IntPtr hMenu
             );
+
 
             [DllImport("user32.dll")]
             public static extern IntPtr GetSubMenu(
@@ -104,11 +117,13 @@ jobs:
                 int nPos
             );
 
+
             [DllImport("user32.dll")]
             public static extern uint GetMenuItemID(
                 IntPtr hMenu,
                 int nPos
             );
+
 
             [DllImport(
                 "user32.dll",
@@ -122,6 +137,7 @@ jobs:
                 uint flags
             );
 
+
             [DllImport("user32.dll")]
             public static extern IntPtr SendMessage(
                 IntPtr hWnd,
@@ -130,6 +146,7 @@ jobs:
                 IntPtr lParam
             );
 
+
             [DllImport("user32.dll")]
             public static extern bool PostMessage(
                 IntPtr hWnd,
@@ -137,66 +154,53 @@ jobs:
                 IntPtr wParam,
                 IntPtr lParam
             );
-        }
-        "@
 
 
-        # ============================================================
-        # CONTROLES / DIALOGOS NATIVOS
-        # ============================================================
-
-        Add-Type @"
-        using System;
-        using System.Collections.Generic;
-        using System.Text;
-        using System.Runtime.InteropServices;
-
-        public static class NativeDialogs
-        {
-            public const uint BM_CLICK = 0x00F5;
-            public const uint WM_SETTEXT = 0x000C;
-            public const uint WM_LBUTTONDOWN = 0x0201;
-            public const uint WM_LBUTTONUP = 0x0202;
-            public const uint MK_LBUTTON = 0x0001;
-
-            public delegate bool EnumWindowsProc(
+            [DllImport(
+                "user32.dll",
+                CharSet = CharSet.Auto
+            )]
+            static extern IntPtr SendMessageText(
                 IntPtr hWnd,
-                IntPtr lParam
+                uint Msg,
+                IntPtr wParam,
+                string lParam
             );
+
 
             [DllImport("user32.dll")]
             static extern bool EnumWindows(
-                EnumWindowsProc lpEnumFunc,
+                EnumWindowsProc callback,
                 IntPtr lParam
             );
+
 
             [DllImport("user32.dll")]
             static extern bool EnumChildWindows(
                 IntPtr hWndParent,
-                EnumWindowsProc lpEnumFunc,
+                EnumWindowsProc callback,
                 IntPtr lParam
             );
+
 
             [DllImport("user32.dll")]
             static extern uint GetWindowThreadProcessId(
                 IntPtr hWnd,
-                out uint lpdwProcessId
+                out uint processId
             );
+
 
             [DllImport("user32.dll")]
             static extern bool IsWindowVisible(
                 IntPtr hWnd
             );
 
+
             [DllImport("user32.dll")]
             public static extern bool IsWindow(
                 IntPtr hWnd
             );
 
-            [DllImport("user32.dll")]
-            public static extern bool IsWindowEnabled(
-                IntPtr hWnd
-            );
 
             [DllImport(
                 "user32.dll",
@@ -208,6 +212,7 @@ jobs:
                 int nMaxCount
             );
 
+
             [DllImport(
                 "user32.dll",
                 CharSet = CharSet.Auto
@@ -218,35 +223,8 @@ jobs:
                 int nMaxCount
             );
 
-            [DllImport("user32.dll")]
-            static extern IntPtr SendMessage(
-                IntPtr hWnd,
-                uint Msg,
-                IntPtr wParam,
-                IntPtr lParam
-            );
 
-            [DllImport(
-                "user32.dll",
-                CharSet = CharSet.Auto
-            )]
-            static extern IntPtr SendMessage(
-                IntPtr hWnd,
-                uint Msg,
-                IntPtr wParam,
-                string lParam
-            );
-
-            [DllImport("user32.dll")]
-            static extern bool PostMessage(
-                IntPtr hWnd,
-                uint Msg,
-                IntPtr wParam,
-                IntPtr lParam
-            );
-
-
-            public static string GetText(
+            public static string Text(
                 IntPtr hWnd
             )
             {
@@ -263,7 +241,7 @@ jobs:
             }
 
 
-            public static string GetClass(
+            public static string ClassName(
                 IntPtr hWnd
             )
             {
@@ -280,7 +258,7 @@ jobs:
             }
 
 
-            public static IntPtr[] GetTopWindows(
+            public static IntPtr[] TopWindows(
                 int processId
             )
             {
@@ -314,7 +292,7 @@ jobs:
             }
 
 
-            public static IntPtr[] GetChildren(
+            public static IntPtr[] Children(
                 IntPtr parent
             )
             {
@@ -326,6 +304,7 @@ jobs:
                     delegate(IntPtr hWnd, IntPtr lParam)
                     {
                         result.Add(hWnd);
+
                         return true;
                     },
                     IntPtr.Zero
@@ -335,29 +314,29 @@ jobs:
             }
 
 
-            public static string GetCombinedText(
+            public static string CombinedText(
                 IntPtr parent
             )
             {
                 StringBuilder result =
                     new StringBuilder();
 
-                string rootText =
-                    GetText(parent);
+                string root =
+                    Text(parent);
 
-                if (!String.IsNullOrWhiteSpace(rootText))
+                if (!String.IsNullOrWhiteSpace(root))
                 {
-                    result.Append(rootText);
+                    result.Append(root);
                     result.Append(" ");
                 }
 
                 foreach (
                     IntPtr child in
-                    GetChildren(parent)
+                    Children(parent)
                 )
                 {
                     string text =
-                        GetText(child);
+                        Text(child);
 
                     if (!String.IsNullOrWhiteSpace(text))
                     {
@@ -370,65 +349,7 @@ jobs:
             }
 
 
-            static bool ContainsAll(
-                string source,
-                string[] terms
-            )
-            {
-                if (terms == null)
-                    return true;
-
-                string value =
-                    source.ToLowerInvariant();
-
-                foreach (string term in terms)
-                {
-                    if (
-                        String.IsNullOrWhiteSpace(term)
-                    )
-                        continue;
-
-                    if (
-                        !value.Contains(
-                            term.ToLowerInvariant()
-                        )
-                    )
-                        return false;
-                }
-
-                return true;
-            }
-
-
-            public static IntPtr FindWindow(
-                int processId,
-                string[] requiredTerms
-            )
-            {
-                foreach (
-                    IntPtr hWnd in
-                    GetTopWindows(processId)
-                )
-                {
-                    string text =
-                        GetCombinedText(hWnd);
-
-                    if (
-                        ContainsAll(
-                            text,
-                            requiredTerms
-                        )
-                    )
-                    {
-                        return hWnd;
-                    }
-                }
-
-                return IntPtr.Zero;
-            }
-
-
-            static string NormalizeText(
+            static string Normalize(
                 string value
             )
             {
@@ -441,19 +362,80 @@ jobs:
             }
 
 
-            public static IntPtr FindChildByText(
+            static bool ContainsAll(
+                string source,
+                string[] values
+            )
+            {
+                if (values == null)
+                    return true;
+
+                string text =
+                    source.ToLowerInvariant();
+
+                foreach (
+                    string value in
+                    values
+                )
+                {
+                    if (
+                        String.IsNullOrWhiteSpace(value)
+                    )
+                        continue;
+
+                    if (
+                        !text.Contains(
+                            value.ToLowerInvariant()
+                        )
+                    )
+                        return false;
+                }
+
+                return true;
+            }
+
+
+            public static IntPtr FindWindow(
+                int processId,
+                string[] terms
+            )
+            {
+                foreach (
+                    IntPtr window in
+                    TopWindows(processId)
+                )
+                {
+                    string text =
+                        CombinedText(window);
+
+                    if (
+                        ContainsAll(
+                            text,
+                            terms
+                        )
+                    )
+                    {
+                        return window;
+                    }
+                }
+
+                return IntPtr.Zero;
+            }
+
+
+            public static IntPtr FindChildText(
                 IntPtr parent,
                 string[] names
             )
             {
                 foreach (
                     IntPtr child in
-                    GetChildren(parent)
+                    Children(parent)
                 )
                 {
                     string current =
-                        NormalizeText(
-                            GetText(child)
+                        Normalize(
+                            Text(child)
                         );
 
                     foreach (
@@ -464,7 +446,7 @@ jobs:
                         if (
                             String.Equals(
                                 current,
-                                NormalizeText(wanted),
+                                Normalize(wanted),
                                 StringComparison.OrdinalIgnoreCase
                             )
                         )
@@ -478,22 +460,22 @@ jobs:
             }
 
 
-            public static IntPtr FindChildByClass(
+            public static IntPtr FindChildClass(
                 IntPtr parent,
-                string[] classParts
+                string[] names
             )
             {
                 foreach (
                     IntPtr child in
-                    GetChildren(parent)
+                    Children(parent)
                 )
                 {
                     string current =
-                        GetClass(child);
+                        ClassName(child);
 
                     foreach (
                         string wanted in
-                        classParts
+                        names
                     )
                     {
                         if (
@@ -512,7 +494,16 @@ jobs:
             }
 
 
-            public static bool Click(
+            // =======================================================
+            // IMPORTANTE:
+            //
+            // CLICK ASINCRONICO.
+            //
+            // PostMessage evita que PowerShell quede bloqueado
+            // mientras Softland abre una ventana modal.
+            // =======================================================
+
+            public static bool ClickAsync(
                 IntPtr hWnd
             )
             {
@@ -520,52 +511,18 @@ jobs:
                     hWnd == IntPtr.Zero ||
                     !IsWindow(hWnd)
                 )
-                {
                     return false;
-                }
 
-                SendMessage(
+                return PostMessage(
                     hWnd,
                     BM_CLICK,
                     IntPtr.Zero,
                     IntPtr.Zero
                 );
-
-                return true;
             }
 
 
-            public static bool ClickWithMouseMessages(
-                IntPtr hWnd
-            )
-            {
-                if (
-                    hWnd == IntPtr.Zero ||
-                    !IsWindow(hWnd)
-                )
-                {
-                    return false;
-                }
-
-                PostMessage(
-                    hWnd,
-                    WM_LBUTTONDOWN,
-                    new IntPtr(MK_LBUTTON),
-                    IntPtr.Zero
-                );
-
-                PostMessage(
-                    hWnd,
-                    WM_LBUTTONUP,
-                    IntPtr.Zero,
-                    IntPtr.Zero
-                );
-
-                return true;
-            }
-
-
-            public static bool SetText(
+            public static bool SetTextValue(
                 IntPtr hWnd,
                 string value
             )
@@ -574,11 +531,9 @@ jobs:
                     hWnd == IntPtr.Zero ||
                     !IsWindow(hWnd)
                 )
-                {
                     return false;
-                }
 
-                SendMessage(
+                SendMessageText(
                     hWnd,
                     WM_SETTEXT,
                     IntPtr.Zero,
@@ -734,7 +689,7 @@ jobs:
                     return false;
                 }
 
-                byte[] lvItem =
+                byte[] item =
                     new byte[20];
 
                 uint stateValue =
@@ -747,7 +702,7 @@ jobs:
                         stateValue
                     ),
                     0,
-                    lvItem,
+                    item,
                     12,
                     4
                 );
@@ -757,66 +712,62 @@ jobs:
                         LVIS_STATEIMAGEMASK
                     ),
                     0,
-                    lvItem,
+                    item,
                     16,
                     4
                 );
 
-                IntPtr remoteMemory =
+                IntPtr remote =
                     VirtualAllocEx(
                         process,
                         IntPtr.Zero,
-                        (UIntPtr)lvItem.Length,
+                        (UIntPtr)item.Length,
                         MEM_COMMIT |
                         MEM_RESERVE,
                         PAGE_READWRITE
                     );
 
                 if (
-                    remoteMemory ==
+                    remote ==
                     IntPtr.Zero
                 )
                 {
-                    CloseHandle(
-                        process
-                    );
+                    CloseHandle(process);
 
                     return false;
                 }
 
                 UIntPtr written;
 
-                bool ok =
+                bool result =
                     WriteProcessMemory(
                         process,
-                        remoteMemory,
-                        lvItem,
-                        (UIntPtr)lvItem.Length,
+                        remote,
+                        item,
+                        (UIntPtr)item.Length,
                         out written
                     );
 
-                if (ok)
+                if (result)
                 {
                     SendMessage(
                         handle,
                         LVM_SETITEMSTATE,
                         new IntPtr(index),
-                        remoteMemory
+                        remote
                     );
                 }
 
                 VirtualFreeEx(
                     process,
-                    remoteMemory,
+                    remote,
                     UIntPtr.Zero,
                     MEM_RELEASE
                 );
 
-                CloseHandle(
-                    process
-                );
+                CloseHandle(process);
 
-                return ok;
+                return result;
             }
         }
         "@
@@ -828,13 +779,9 @@ jobs:
 
         function Normalize-Text {
 
-            param(
-                [string]$Text
-            )
+            param([string]$Text)
 
-            if (
-                $null -eq $Text
-            ) {
+            if ($null -eq $Text) {
                 return ""
             }
 
@@ -844,11 +791,8 @@ jobs:
                     ""
                 ).Trim().ToLowerInvariant()
 
-            if (
-                $Text.Contains("`t")
-            ) {
-                $Text =
-                    $Text.Split("`t")[0]
+            if ($Text.Contains("`t")) {
+                $Text = $Text.Split("`t")[0]
             }
 
             $Normalized =
@@ -917,46 +861,6 @@ jobs:
         }
 
 
-        function Get-ElementByName {
-
-            param(
-                [System.Windows.Automation.AutomationElement]$Root,
-                [string[]]$Names
-            )
-
-            foreach (
-                $Element in
-                (Get-Descendants -Root $Root)
-            ) {
-
-                try {
-
-                    $Actual =
-                        Normalize-Text `
-                            $Element.Current.Name
-
-                    foreach (
-                        $Name in
-                        $Names
-                    ) {
-
-                        if (
-                            $Actual -eq
-                            (Normalize-Text $Name)
-                        ) {
-
-                            return $Element
-                        }
-                    }
-                }
-                catch {
-                }
-            }
-
-            return $null
-        }
-
-
         function Get-MenuText {
 
             param(
@@ -967,30 +871,30 @@ jobs:
             $Builder =
                 New-Object System.Text.StringBuilder 512
 
-            [void][NativeWindows]::GetMenuString(
+            [void][NativeUI]::GetMenuString(
                 $MenuHandle,
                 [uint32]$Position,
                 $Builder,
                 512,
-                [NativeWindows]::MF_BYPOSITION
+                [NativeUI]::MF_BYPOSITION
             )
 
             return $Builder.ToString()
         }
 
 
-        function Find-NativeMenuPosition {
+        function Find-MenuPosition {
 
             param(
                 [IntPtr]$MenuHandle,
-                [string]$WantedText
+                [string]$Text
             )
 
             $Wanted =
-                Normalize-Text $WantedText
+                Normalize-Text $Text
 
             $Count =
-                [NativeWindows]::GetMenuItemCount(
+                [NativeUI]::GetMenuItemCount(
                     $MenuHandle
                 )
 
@@ -1018,12 +922,12 @@ jobs:
         }
 
 
-        function Wait-NativeDialog {
+        function Wait-Dialog {
 
             param(
                 [int]$ProcessId,
                 [string[]]$Terms,
-                [int]$TimeoutSeconds = 60
+                [int]$TimeoutSeconds = 120
             )
 
             $End =
@@ -1036,7 +940,7 @@ jobs:
             ) {
 
                 $Handle =
-                    [NativeDialogs]::FindWindow(
+                    [NativeUI]::FindWindow(
                         $ProcessId,
                         $Terms
                     )
@@ -1056,59 +960,7 @@ jobs:
         }
 
 
-        function Wait-NativeDialogWithButton {
-
-            param(
-                [int]$ProcessId,
-                [string[]]$ButtonNames,
-                [int]$TimeoutSeconds = 60
-            )
-
-            $End =
-                (Get-Date).AddSeconds(
-                    $TimeoutSeconds
-                )
-
-            while (
-                (Get-Date) -lt $End
-            ) {
-
-                $Windows =
-                    [NativeDialogs]::GetTopWindows(
-                        $ProcessId
-                    )
-
-                foreach (
-                    $WindowHandle in
-                    $Windows
-                ) {
-
-                    $Button =
-                        [NativeDialogs]::FindChildByText(
-                            $WindowHandle,
-                            $ButtonNames
-                        )
-
-                    if (
-                        $Button -ne
-                        [IntPtr]::Zero
-                    ) {
-
-                        return [PSCustomObject]@{
-                            Window = $WindowHandle
-                            Button = $Button
-                        }
-                    }
-                }
-
-                Start-Sleep -Milliseconds 300
-            }
-
-            return $null
-        }
-
-
-        function Wait-NativeHandleGone {
+        function Wait-WindowGone {
 
             param(
                 [IntPtr]$Handle,
@@ -1126,7 +978,7 @@ jobs:
 
                 if (
                     -not (
-                        [NativeDialogs]::IsWindow(
+                        [NativeUI]::IsWindow(
                             $Handle
                         )
                     )
@@ -1142,7 +994,21 @@ jobs:
         }
 
 
-        function Click-NativeButton {
+        function Find-Button {
+
+            param(
+                [IntPtr]$Window,
+                [string[]]$Names
+            )
+
+            return [NativeUI]::FindChildText(
+                $Window,
+                $Names
+            )
+        }
+
+
+        function Click-ButtonAsync {
 
             param(
                 [IntPtr]$Window,
@@ -1150,68 +1016,54 @@ jobs:
             )
 
             $Button =
-                [NativeDialogs]::FindChildByText(
-                    $Window,
-                    $Names
-                )
+                Find-Button `
+                    -Window $Window `
+                    -Names $Names
 
             if (
                 $Button -eq
                 [IntPtr]::Zero
             ) {
 
-                throw "No se encontro el boton: $($Names -join ', ')"
+                throw "No se encontro boton: $($Names -join ', ')"
             }
 
-            $ButtonText =
-                [NativeDialogs]::GetText(
+            $Text =
+                [NativeUI]::Text(
                     $Button
                 )
 
-            $ButtonClass =
-                [NativeDialogs]::GetClass(
+            $Class =
+                [NativeUI]::ClassName(
                     $Button
                 )
 
-            Write-Host "[INFO] Control encontrado:"
-            Write-Host "       Texto  : $ButtonText"
-            Write-Host "       Clase  : $ButtonClass"
+            Write-Host "[INFO] Boton detectado:"
+            Write-Host "       Texto  : $Text"
+            Write-Host "       Clase  : $Class"
             Write-Host "       Handle : $Button"
 
 
-            $Clicked =
-                [NativeDialogs]::Click(
-                    $Button
-                )
-
-
-            if (-not $Clicked) {
-
-                Write-Host "[WARN] BM_CLICK fallo."
-                Write-Host "[INFO] Intentando mensajes de mouse..."
-
-
-                $Clicked =
-                    [NativeDialogs]::ClickWithMouseMessages(
+            if (
+                -not (
+                    [NativeUI]::ClickAsync(
                         $Button
                     )
+                )
+            ) {
+
+                throw "No fue posible enviar click asincronico a $Text."
             }
-
-
-            if (-not $Clicked) {
-
-                throw "No fue posible ejecutar click sobre $($Names -join ', ')."
-            }
-
 
             return $Button
         }
 
 
-        function Wait-PasswordDialog {
+        function Wait-DialogWithButton {
 
             param(
                 [int]$ProcessId,
+                [string[]]$ButtonNames,
                 [int]$TimeoutSeconds = 120
             )
 
@@ -1224,87 +1076,41 @@ jobs:
                 (Get-Date) -lt $End
             ) {
 
-                $Dialog =
-                    [NativeDialogs]::FindWindow(
-                        $ProcessId,
-                        @(
-                            "contrase"
-                        )
+                $Windows =
+                    [NativeUI]::TopWindows(
+                        $ProcessId
                     )
 
-                if (
-                    $Dialog -ne
-                    [IntPtr]::Zero
+                foreach (
+                    $Window in
+                    $Windows
                 ) {
 
-                    return $Dialog
-                }
-
-
-                # ----------------------------------------------------
-                # CONFIRMACION INTERMEDIA
-                # ----------------------------------------------------
-
-                $ConversionDialog =
-                    [NativeDialogs]::FindWindow(
-                        $ProcessId,
-                        @(
-                            "convert",
-                            "empresa"
-                        )
-                    )
-
-
-                if (
-                    $ConversionDialog -ne
-                    [IntPtr]::Zero
-                ) {
-
-                    $YesButton =
-                        [NativeDialogs]::FindChildByText(
-                            $ConversionDialog,
-                            @(
-                                "Si",
-                                "Sí"
-                            )
-                        )
-
+                    $Button =
+                        Find-Button `
+                            -Window $Window `
+                            -Names $ButtonNames
 
                     if (
-                        $YesButton -ne
+                        $Button -ne
                         [IntPtr]::Zero
                     ) {
 
-                        $Texto =
-                            [NativeDialogs]::GetCombinedText(
-                                $ConversionDialog
-                            )
-
-
-                        Write-Host "[INFO] Confirmacion previa a contraseña:"
-                        Write-Host "       $Texto"
-                        Write-Host "[INFO] Presionando Si..."
-
-
-                        [void][NativeDialogs]::Click(
-                            $YesButton
-                        )
-
-
-                        Start-Sleep -Milliseconds 500
+                        return [PSCustomObject]@{
+                            Window = $Window
+                            Button = $Button
+                        }
                     }
                 }
-
 
                 Start-Sleep -Milliseconds 300
             }
 
-
-            return [IntPtr]::Zero
+            return $null
         }
 
 
-        function Set-NativePassword {
+        function Set-Password {
 
             param(
                 [IntPtr]$Dialog,
@@ -1312,7 +1118,7 @@ jobs:
             )
 
             $Edit =
-                [NativeDialogs]::FindChildByClass(
+                [NativeUI]::FindChildClass(
                     $Dialog,
                     @(
                         "TextBox",
@@ -1320,110 +1126,50 @@ jobs:
                     )
                 )
 
-
             if (
-                $Edit -ne
+                $Edit -eq
                 [IntPtr]::Zero
             ) {
 
-                Write-Host "[INFO] Campo contraseña detectado."
-                Write-Host "[INFO] Clase: $([NativeDialogs]::GetClass($Edit))"
-
-
-                return [NativeDialogs]::SetText(
-                    $Edit,
-                    $Value
-                )
+                return $false
             }
 
+            Write-Host "[INFO] Campo contraseña detectado."
+            Write-Host "[INFO] Clase: $([NativeUI]::ClassName($Edit))"
 
-            # --------------------------------------------------------
-            # FALLBACK UI AUTOMATION
-            # --------------------------------------------------------
-
-            $Desktop =
-                [System.Windows.Automation.AutomationElement]::RootElement
-
-
-            foreach (
-                $Element in
-                (Get-Descendants -Root $Desktop)
-            ) {
-
-                try {
-
-                    if (
-                        $Element.Current.ProcessId -ne
-                        $SoftlandProcessId
-                    ) {
-
-                        continue
-                    }
-
-
-                    if (
-                        $Element.Current.ControlType -ne
-                        [System.Windows.Automation.ControlType]::Edit
-                    ) {
-
-                        continue
-                    }
-
-
-                    try {
-
-                        $ValuePattern =
-                            $Element.GetCurrentPattern(
-                                [System.Windows.Automation.ValuePattern]::Pattern
-                            )
-
-
-                        $ValuePattern.SetValue(
-                            $Value
-                        )
-
-
-                        return $true
-                    }
-                    catch {
-                    }
-                }
-                catch {
-                }
-            }
-
-
-            return $false
+            return [NativeUI]::SetTextValue(
+                $Edit,
+                $Value
+            )
         }
 
 
         # ============================================================
-        # PROCESO PRINCIPAL
+        # PROCESO
         # ============================================================
 
         try {
 
 
             # ========================================================
-            # 1 - BUSCAR CWCONFIG
+            # 1 - CWCONFIG
             # ========================================================
 
             Write-Host "[1] Buscando cwConfig.exe..."
 
 
-            $PossiblePaths = @(
+            $Paths = @(
                 "C:\Program Files (x86)\Softland\Cliente\Config\cwConfig.exe",
                 "C:\Program Files\Softland\Cliente\Config\cwConfig.exe"
             )
 
 
-            $ConfigExe =
-                $null
+            $ConfigExe = $null
 
 
             foreach (
                 $Path in
-                $PossiblePaths
+                $Paths
             ) {
 
                 Write-Host "[INFO] Probando: $Path"
@@ -1441,19 +1187,14 @@ jobs:
             }
 
 
-            if (
-                -not $ConfigExe
-            ) {
-
-                $SearchRoots = @(
-                    "C:\Program Files (x86)\Softland",
-                    "C:\Program Files\Softland"
-                )
-
+            if (-not $ConfigExe) {
 
                 foreach (
                     $RootPath in
-                    $SearchRoots
+                    @(
+                        "C:\Program Files (x86)\Softland",
+                        "C:\Program Files\Softland"
+                    )
                 ) {
 
                     if (
@@ -1470,9 +1211,7 @@ jobs:
                             Select-Object -First 1
 
 
-                        if (
-                            $Found
-                        ) {
+                        if ($Found) {
 
                             $ConfigExe =
                                 $Found.FullName
@@ -1484,9 +1223,7 @@ jobs:
             }
 
 
-            if (
-                -not $ConfigExe
-            ) {
+            if (-not $ConfigExe) {
 
                 throw "No se encontro cwConfig.exe."
             }
@@ -1497,51 +1234,45 @@ jobs:
 
 
             # ========================================================
-            # 2 - ABRIR CWCONFIG
+            # 2 - ABRIR
             # ========================================================
 
             $Existing =
                 Get-Process `
-                    -Name "cwConfig" `
+                    -Name cwConfig `
                     -ErrorAction SilentlyContinue
 
 
-            if (
-                $Existing
-            ) {
-
-                Write-Host "[WARN] cwConfig.exe ya estaba abierto."
-                Write-Host "[INFO] Se utilizara la ventana existente."
-            }
-            else {
+            if (-not $Existing) {
 
                 $Started =
                     Start-Process `
                         -FilePath $ConfigExe `
                         -PassThru
 
-
                 Write-Host "[OK] cwConfig iniciado."
                 Write-Host "[INFO] PID inicial: $($Started.Id)"
+            }
+            else {
+
+                Write-Host "[WARN] cwConfig ya estaba abierto."
             }
 
 
             # ========================================================
-            # 3 - VENTANA PRINCIPAL
+            # VENTANA PRINCIPAL
             # ========================================================
 
-            $MainWindow =
-                $null
+            $MainWindow = $null
 
-
-            $Timeout =
+            $End =
                 (Get-Date).AddSeconds(
                     60
                 )
 
 
             while (
-                (Get-Date) -lt $Timeout
+                (Get-Date) -lt $End
             ) {
 
                 $Desktop =
@@ -1583,10 +1314,7 @@ jobs:
                 }
 
 
-                if (
-                    $MainWindow
-                ) {
-
+                if ($MainWindow) {
                     break
                 }
 
@@ -1595,9 +1323,7 @@ jobs:
             }
 
 
-            if (
-                -not $MainWindow
-            ) {
+            if (-not $MainWindow) {
 
                 throw "No se encontro la ventana principal."
             }
@@ -1611,13 +1337,13 @@ jobs:
                 $MainWindow.Current.ProcessId
 
 
-            [NativeWindows]::ShowWindowAsync(
+            [NativeUI]::ShowWindowAsync(
                 $MainHandle,
                 9
             ) | Out-Null
 
 
-            [NativeWindows]::SetForegroundWindow(
+            [NativeUI]::SetForegroundWindow(
                 $MainHandle
             ) | Out-Null
 
@@ -1627,31 +1353,22 @@ jobs:
 
 
             # ========================================================
-            # 4 - OPERACIONES -> EMPRESAS
+            # 3 - EMPRESAS
             # ========================================================
 
             Write-Host "[3] Abriendo Operaciones -> Empresas..."
 
 
             $MainMenu =
-                [NativeWindows]::GetMenu(
+                [NativeUI]::GetMenu(
                     $MainHandle
                 )
 
 
-            if (
-                $MainMenu -eq
-                [IntPtr]::Zero
-            ) {
-
-                throw "No se obtuvo el menu principal."
-            }
-
-
             $PosOperaciones =
-                Find-NativeMenuPosition `
+                Find-MenuPosition `
                     -MenuHandle $MainMenu `
-                    -WantedText "Operaciones"
+                    -Text "Operaciones"
 
 
             if (
@@ -1663,33 +1380,24 @@ jobs:
 
 
             $MenuOperaciones =
-                [NativeWindows]::GetSubMenu(
+                [NativeUI]::GetSubMenu(
                     $MainMenu,
                     $PosOperaciones
                 )
 
 
-            if (
-                $MenuOperaciones -eq
-                [IntPtr]::Zero
-            ) {
-
-                throw "No se obtuvo el submenu Operaciones."
-            }
-
-
-            [void][NativeWindows]::SendMessage(
+            [void][NativeUI]::SendMessage(
                 $MainHandle,
-                [NativeWindows]::WM_INITMENUPOPUP,
+                [NativeUI]::WM_INITMENUPOPUP,
                 $MenuOperaciones,
                 [IntPtr]$PosOperaciones
             )
 
 
             $PosEmpresas =
-                Find-NativeMenuPosition `
+                Find-MenuPosition `
                     -MenuHandle $MenuOperaciones `
-                    -WantedText "Empresas"
+                    -Text "Empresas"
 
 
             if (
@@ -1701,15 +1409,15 @@ jobs:
 
 
             $CommandEmpresas =
-                [NativeWindows]::GetMenuItemID(
+                [NativeUI]::GetMenuItemID(
                     $MenuOperaciones,
                     $PosEmpresas
                 )
 
 
-            [void][NativeWindows]::PostMessage(
+            [void][NativeUI]::PostMessage(
                 $MainHandle,
-                [NativeWindows]::WM_COMMAND,
+                [NativeUI]::WM_COMMAND,
                 [IntPtr]$CommandEmpresas,
                 [IntPtr]::Zero
             )
@@ -1722,25 +1430,23 @@ jobs:
 
 
             # ========================================================
-            # 5 - LISTVIEW
+            # 4 - LISTVIEW
             # ========================================================
 
-            $ListaEmpresas =
+            $Lista =
                 Get-ElementByClass `
                     -Root $MainWindow `
                     -ClassName "ListView20WndClass"
 
 
-            if (
-                -not $ListaEmpresas
-            ) {
+            if (-not $Lista) {
 
                 throw "No se encontro ListView20WndClass."
             }
 
 
             $ListHandle =
-                [IntPtr]$ListaEmpresas.Current.NativeWindowHandle
+                [IntPtr]$Lista.Current.NativeWindowHandle
 
 
             $CantidadEmpresas =
@@ -1761,7 +1467,7 @@ jobs:
 
 
             # ========================================================
-            # 6 - MARCAR TODAS
+            # 5 - MARCAR
             # ========================================================
 
             Write-Host "[5] Marcando empresas..."
@@ -1784,16 +1490,14 @@ jobs:
                     $Estado -ne 2
                 ) {
 
-                    $Resultado =
-                        [NativeListView]::SetChecked(
-                            $ListHandle,
-                            $i,
-                            $true
-                        )
-
-
                     if (
-                        -not $Resultado
+                        -not (
+                            [NativeListView]::SetChecked(
+                                $ListHandle,
+                                $i,
+                                $true
+                            )
+                        )
                     ) {
 
                         throw "No se pudo marcar fila $($i + 1)."
@@ -1806,18 +1510,14 @@ jobs:
 
 
             # ========================================================
-            # 7 - CONVERTIR
-            #
-            # CORRECCION:
-            # Ya no se usa UI Automation para hacer click.
-            # Se usa el handle Win32 real del control.
+            # 6 - CONVERTIR
             # ========================================================
 
             Write-Host "[6] Buscando boton Convertir..."
 
 
-            $ConvertirNative =
-                [NativeDialogs]::FindChildByText(
+            $Convertir =
+                [NativeUI]::FindChildText(
                     $MainHandle,
                     @(
                         "Convertir"
@@ -1826,76 +1526,48 @@ jobs:
 
 
             if (
-                $ConvertirNative -eq
+                $Convertir -eq
                 [IntPtr]::Zero
             ) {
 
-                throw "No se encontro el control nativo Convertir."
+                throw "No se encontro Convertir."
             }
-
-
-            $ConvertirTexto =
-                [NativeDialogs]::GetText(
-                    $ConvertirNative
-                )
-
-
-            $ConvertirClase =
-                [NativeDialogs]::GetClass(
-                    $ConvertirNative
-                )
 
 
             Write-Host "[OK] Convertir detectado."
-            Write-Host "[INFO] Texto  : $ConvertirTexto"
-            Write-Host "[INFO] Clase  : $ConvertirClase"
-            Write-Host "[INFO] Handle : $ConvertirNative"
+            Write-Host "[INFO] Texto  : $([NativeUI]::Text($Convertir))"
+            Write-Host "[INFO] Clase  : $([NativeUI]::ClassName($Convertir))"
+            Write-Host "[INFO] Handle : $Convertir"
 
 
-            Write-Host "[INFO] Presionando Convertir mediante Win32..."
-
-
-            $ClickConvertir =
-                [NativeDialogs]::Click(
-                    $ConvertirNative
-                )
+            Write-Host "[INFO] Presionando Convertir de forma ASINCRONICA..."
 
 
             if (
-                -not $ClickConvertir
-            ) {
-
-                Write-Host "[WARN] BM_CLICK no pudo utilizarse."
-                Write-Host "[INFO] Probando WM_LBUTTONDOWN / WM_LBUTTONUP..."
-
-
-                $ClickConvertir =
-                    [NativeDialogs]::ClickWithMouseMessages(
-                        $ConvertirNative
+                -not (
+                    [NativeUI]::ClickAsync(
+                        $Convertir
                     )
-            }
-
-
-            if (
-                -not $ClickConvertir
+                )
             ) {
 
-                throw "No fue posible presionar Convertir mediante Win32."
+                throw "No fue posible enviar click a Convertir."
             }
 
 
-            Write-Host "[OK] Comando de click enviado a Convertir."
+            # ESTA LINEA AHORA SI DEBE APARECER
+            Write-Host "[OK] Click asincronico enviado a Convertir."
 
 
             # ========================================================
-            # 8 - CONFIRMACION GENERAL
+            # 7 - CONFIRMACION GENERAL
             # ========================================================
 
             Write-Host "[7] Esperando confirmacion general..."
 
 
-            $ConfirmacionGeneral =
-                Wait-NativeDialog `
+            $General =
+                Wait-Dialog `
                     -ProcessId $SoftlandProcessId `
                     -Terms @(
                         "convertir",
@@ -1905,17 +1577,17 @@ jobs:
 
 
             if (
-                $ConfirmacionGeneral -eq
+                $General -eq
                 [IntPtr]::Zero
             ) {
 
-                throw "No se detecto el cartel de confirmacion general."
+                throw "No se detecto la confirmacion general."
             }
 
 
             $TextoGeneral =
-                [NativeDialogs]::GetCombinedText(
-                    $ConfirmacionGeneral
+                [NativeUI]::CombinedText(
+                    $General
                 )
 
 
@@ -1923,27 +1595,33 @@ jobs:
             Write-Host "     $TextoGeneral"
 
 
-            $BotonSiGeneral =
-                Click-NativeButton `
-                    -Window $ConfirmacionGeneral `
+            $YesGeneral =
+                Click-ButtonAsync `
+                    -Window $General `
                     -Names @(
                         "Si",
                         "Sí"
                     )
 
 
-            Write-Host "[OK] Se presiono Si en la confirmacion general."
+            Write-Host "[OK] Click asincronico enviado a Si."
 
 
-            Start-Sleep -Milliseconds 800
+            [void](
+                Wait-WindowGone `
+                    -Handle $General `
+                    -TimeoutSeconds 30
+            )
+
+
+            Start-Sleep -Milliseconds 500
 
 
             # ========================================================
-            # 9 - PROCESAR EMPRESAS
+            # 8 - EMPRESAS
             # ========================================================
 
-            $Convertidas =
-                0
+            $Convertidas = 0
 
 
             for (
@@ -1960,15 +1638,18 @@ jobs:
 
 
                 # ====================================================
-                # CONTRASEÑA
+                # PASSWORD
                 # ====================================================
 
                 Write-Host "[INFO] Esperando Ingrese contraseña..."
 
 
                 $PasswordDialog =
-                    Wait-PasswordDialog `
+                    Wait-Dialog `
                         -ProcessId $SoftlandProcessId `
+                        -Terms @(
+                            "contrase"
+                        ) `
                         -TimeoutSeconds 120
 
 
@@ -1977,62 +1658,62 @@ jobs:
                     [IntPtr]::Zero
                 ) {
 
-                    throw "No aparecio la ventana Ingrese contraseña."
+                    throw "No aparecio Ingrese contraseña."
                 }
 
 
-                $TextoPassword =
-                    [NativeDialogs]::GetCombinedText(
-                        $PasswordDialog
-                    )
-
-
                 Write-Host "[OK] Ventana contraseña detectada:"
-                Write-Host "     $TextoPassword"
-
-
-                $PasswordResult =
-                    Set-NativePassword `
-                        -Dialog $PasswordDialog `
-                        -Value $Password
+                Write-Host "     $([NativeUI]::CombinedText($PasswordDialog))"
 
 
                 if (
-                    -not $PasswordResult
+                    -not (
+                        Set-Password `
+                            -Dialog $PasswordDialog `
+                            -Value $Password
+                    )
                 ) {
 
-                    throw "No fue posible completar la contraseña."
+                    throw "No se pudo completar la contraseña."
                 }
 
 
                 Write-Host "[OK] Contraseña ingresada."
-                Write-Host "[INFO] El valor secreto no se muestra en el log."
+                Write-Host "[INFO] El valor secreto no se muestra."
 
 
-                $AceptarPassword =
-                    Click-NativeButton `
+                [void](
+                    Click-ButtonAsync `
                         -Window $PasswordDialog `
                         -Names @(
                             "Aceptar",
                             "OK"
                         )
+                )
 
 
-                Write-Host "[OK] Aceptar presionado."
+                Write-Host "[OK] Aceptar enviado."
 
 
-                Start-Sleep -Milliseconds 800
+                [void](
+                    Wait-WindowGone `
+                        -Handle $PasswordDialog `
+                        -TimeoutSeconds 30
+                )
+
+
+                Start-Sleep -Milliseconds 500
 
 
                 # ====================================================
-                # PRIMERA CONFIRMACION POSTERIOR
+                # SI 1
                 # ====================================================
 
                 Write-Host "[INFO] Esperando primera confirmacion posterior..."
 
 
                 $Confirm1 =
-                    Wait-NativeDialogWithButton `
+                    Wait-DialogWithButton `
                         -ProcessId $SoftlandProcessId `
                         -ButtonNames @(
                             "Si",
@@ -2041,44 +1722,50 @@ jobs:
                         -TimeoutSeconds 120
 
 
-                if (
-                    -not $Confirm1
-                ) {
+                if (-not $Confirm1) {
 
                     throw "No aparecio la primera confirmacion posterior."
                 }
 
 
-                $Texto1 =
-                    [NativeDialogs]::GetCombinedText(
-                        $Confirm1.Window
-                    )
-
-
                 Write-Host "[INFO] Confirmacion 1:"
-                Write-Host "       $Texto1"
+                Write-Host "       $([NativeUI]::CombinedText($Confirm1.Window))"
 
 
-                [void][NativeDialogs]::Click(
-                    $Confirm1.Button
+                if (
+                    -not (
+                        [NativeUI]::ClickAsync(
+                            $Confirm1.Button
+                        )
+                    )
+                ) {
+
+                    throw "No se pudo presionar Si #1."
+                }
+
+
+                Write-Host "[OK] Si #1 enviado."
+
+
+                [void](
+                    Wait-WindowGone `
+                        -Handle $Confirm1.Window `
+                        -TimeoutSeconds 30
                 )
 
 
-                Write-Host "[OK] Si #1 presionado."
-
-
-                Start-Sleep -Milliseconds 800
+                Start-Sleep -Milliseconds 500
 
 
                 # ====================================================
-                # SEGUNDA CONFIRMACION POSTERIOR
+                # SI 2
                 # ====================================================
 
                 Write-Host "[INFO] Esperando segunda confirmacion posterior..."
 
 
                 $Confirm2 =
-                    Wait-NativeDialogWithButton `
+                    Wait-DialogWithButton `
                         -ProcessId $SoftlandProcessId `
                         -ButtonNames @(
                             "Si",
@@ -2087,30 +1774,36 @@ jobs:
                         -TimeoutSeconds 120
 
 
-                if (
-                    -not $Confirm2
-                ) {
+                if (-not $Confirm2) {
 
                     throw "No aparecio la segunda confirmacion posterior."
                 }
 
 
-                $Texto2 =
-                    [NativeDialogs]::GetCombinedText(
-                        $Confirm2.Window
-                    )
-
-
                 Write-Host "[INFO] Confirmacion 2:"
-                Write-Host "       $Texto2"
+                Write-Host "       $([NativeUI]::CombinedText($Confirm2.Window))"
 
 
-                [void][NativeDialogs]::Click(
-                    $Confirm2.Button
+                if (
+                    -not (
+                        [NativeUI]::ClickAsync(
+                            $Confirm2.Button
+                        )
+                    )
+                ) {
+
+                    throw "No se pudo presionar Si #2."
+                }
+
+
+                Write-Host "[OK] Si #2 enviado."
+
+
+                [void](
+                    Wait-WindowGone `
+                        -Handle $Confirm2.Window `
+                        -TimeoutSeconds 30
                 )
-
-
-                Write-Host "[OK] Si #2 presionado."
 
 
                 Start-Sleep -Seconds 1
@@ -2125,7 +1818,7 @@ jobs:
 
 
                 $Finalizado =
-                    Wait-NativeDialog `
+                    Wait-Dialog `
                         -ProcessId $SoftlandProcessId `
                         -Terms @(
                             "finaliz",
@@ -2139,32 +1832,33 @@ jobs:
                     [IntPtr]::Zero
                 ) {
 
-                    throw "No aparecio el cartel de finalizacion de conversion."
+                    throw "No aparecio el cartel de finalizacion."
                 }
 
 
-                $TextoFinal =
-                    [NativeDialogs]::GetCombinedText(
-                        $Finalizado
-                    )
-
-
                 Write-Host ""
-                Write-Host "[OK] Conversion finalizada."
-                Write-Host "[INFO] Mensaje:"
-                Write-Host "       $TextoFinal"
+                Write-Host "[OK] Conversion finalizada:"
+                Write-Host "     $([NativeUI]::CombinedText($Finalizado))"
 
 
-                $BotonOK =
-                    Click-NativeButton `
+                [void](
+                    Click-ButtonAsync `
                         -Window $Finalizado `
                         -Names @(
                             "OK",
                             "Aceptar"
                         )
+                )
 
 
-                Write-Host "[OK] OK de finalizacion presionado."
+                Write-Host "[OK] OK de finalizacion enviado."
+
+
+                [void](
+                    Wait-WindowGone `
+                        -Handle $Finalizado `
+                        -TimeoutSeconds 30
+                )
 
 
                 $Convertidas++
@@ -2183,15 +1877,15 @@ jobs:
                     $CantidadEmpresas
                 ) {
 
-                    Start-Sleep -Milliseconds 800
+                    Start-Sleep -Milliseconds 500
 
 
                     Write-Host ""
-                    Write-Host "[INFO] Esperando confirmacion para la siguiente empresa..."
+                    Write-Host "[INFO] Esperando confirmacion de la siguiente empresa..."
 
 
                     $Siguiente =
-                        Wait-NativeDialog `
+                        Wait-Dialog `
                             -ProcessId $SoftlandProcessId `
                             -Terms @(
                                 "convertir",
@@ -2209,35 +1903,37 @@ jobs:
                     }
 
 
-                    $TextoSiguiente =
-                        [NativeDialogs]::GetCombinedText(
-                            $Siguiente
-                        )
+                    Write-Host "[INFO] Siguiente empresa:"
+                    Write-Host "       $([NativeUI]::CombinedText($Siguiente))"
 
 
-                    Write-Host "[INFO] Softland solicita continuar:"
-                    Write-Host "       $TextoSiguiente"
-
-
-                    $BotonSiguiente =
-                        Click-NativeButton `
+                    [void](
+                        Click-ButtonAsync `
                             -Window $Siguiente `
                             -Names @(
                                 "Si",
                                 "Sí"
                             )
+                    )
 
 
-                    Write-Host "[OK] Se autorizo continuar con la siguiente empresa."
+                    Write-Host "[OK] Si enviado para continuar."
 
 
-                    Start-Sleep -Milliseconds 800
+                    [void](
+                        Wait-WindowGone `
+                            -Handle $Siguiente `
+                            -TimeoutSeconds 30
+                    )
+
+
+                    Start-Sleep -Milliseconds 500
                 }
             }
 
 
             # ========================================================
-            # FINAL
+            # FIN
             # ========================================================
 
             Write-Host ""
@@ -2265,13 +1961,12 @@ jobs:
             Write-Host "=========================================================="
             Write-Host ""
 
-
             exit 0
         }
 
 
         # ============================================================
-        # ERROR / DEBUG
+        # ERROR
         # ============================================================
 
         catch {
@@ -2292,16 +1987,13 @@ jobs:
 
             $Procesos =
                 Get-Process `
-                    -Name "cwConfig" `
+                    -Name cwConfig `
                     -ErrorAction SilentlyContinue
 
 
-            if (
-                $Procesos
-            ) {
+            if ($Procesos) {
 
                 Write-Host "[DEBUG] cwConfig.exe continua abierto."
-
 
                 foreach (
                     $Proceso in
@@ -2310,10 +2002,6 @@ jobs:
 
                     Write-Host "[DEBUG] PID cwConfig: $($Proceso.Id)"
                 }
-            }
-            else {
-
-                Write-Host "[WARN] cwConfig.exe no aparece ejecutandose."
             }
 
 
