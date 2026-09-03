@@ -61,7 +61,7 @@ jobs:
 
 
         # ============================================================
-        # WIN32 - MENU Y CONTROLES
+        # WIN32 - MENUS, DIALOGOS Y TECLADO
         # ============================================================
 
         Add-Type @"
@@ -69,19 +69,57 @@ jobs:
         using System.Text;
         using System.Collections.Generic;
         using System.Runtime.InteropServices;
+        using System.Threading;
 
         public static class NativeUI
         {
             public const uint WM_COMMAND = 0x0111;
             public const uint WM_INITMENUPOPUP = 0x0117;
-            public const uint WM_SETTEXT = 0x000C;
             public const uint BM_CLICK = 0x00F5;
             public const uint MF_BYPOSITION = 0x00000400;
+
+            public const int GWL_STYLE = -16;
+            public const long ES_PASSWORD = 0x0020;
+
+            public const uint INPUT_KEYBOARD = 1;
+            public const uint KEYEVENTF_KEYUP = 0x0002;
+            public const uint KEYEVENTF_UNICODE = 0x0004;
+
+            public const ushort VK_CONTROL = 0x11;
+            public const ushort VK_A = 0x41;
+            public const ushort VK_BACK = 0x08;
 
             public delegate bool EnumWindowsProc(
                 IntPtr hWnd,
                 IntPtr lParam
             );
+
+
+            [StructLayout(LayoutKind.Sequential)]
+            public struct INPUT
+            {
+                public uint type;
+                public InputUnion U;
+            }
+
+
+            [StructLayout(LayoutKind.Explicit)]
+            public struct InputUnion
+            {
+                [FieldOffset(0)]
+                public KEYBDINPUT ki;
+            }
+
+
+            [StructLayout(LayoutKind.Sequential)]
+            public struct KEYBDINPUT
+            {
+                public ushort wVk;
+                public ushort wScan;
+                public uint dwFlags;
+                public uint time;
+                public UIntPtr dwExtraInfo;
+            }
 
 
             [DllImport("user32.dll")]
@@ -94,6 +132,12 @@ jobs:
             public static extern bool ShowWindowAsync(
                 IntPtr hWnd,
                 int nCmdShow
+            );
+
+
+            [DllImport("user32.dll")]
+            public static extern IntPtr SetFocus(
+                IntPtr hWnd
             );
 
 
@@ -152,36 +196,6 @@ jobs:
                 IntPtr wParam,
                 IntPtr lParam
             );
-
-
-            #region TEXT
-
-
-            [DllImport(
-                "user32.dll",
-                CharSet = CharSet.Auto,
-                SetLastError = true
-            )]
-            public static extern bool SetWindowText(
-                IntPtr hWnd,
-                string lpString
-            );
-
-
-            [DllImport(
-                "user32.dll",
-                CharSet = CharSet.Auto,
-                EntryPoint = "SendMessage"
-            )]
-            static extern IntPtr SendMessageText(
-                IntPtr hWnd,
-                uint Msg,
-                IntPtr wParam,
-                string lParam
-            );
-
-
-            #endregion
 
 
             [DllImport("user32.dll")]
@@ -244,6 +258,49 @@ jobs:
                 StringBuilder lpClassName,
                 int nMaxCount
             );
+
+
+            [DllImport(
+                "user32.dll",
+                EntryPoint = "GetWindowLong"
+            )]
+            static extern IntPtr GetWindowLongPtr32(
+                IntPtr hWnd,
+                int nIndex
+            );
+
+
+            [DllImport(
+                "user32.dll",
+                EntryPoint = "GetWindowLongPtr"
+            )]
+            static extern IntPtr GetWindowLongPtr64(
+                IntPtr hWnd,
+                int nIndex
+            );
+
+
+            [DllImport(
+                "user32.dll",
+                SetLastError = true
+            )]
+            static extern uint SendInput(
+                uint nInputs,
+                INPUT[] pInputs,
+                int cbSize
+            );
+
+
+            static IntPtr GetWindowLongPtr(
+                IntPtr hWnd,
+                int nIndex
+            )
+            {
+                if (IntPtr.Size == 8)
+                    return GetWindowLongPtr64(hWnd, nIndex);
+
+                return GetWindowLongPtr32(hWnd, nIndex);
+            }
 
 
             public static string Text(
@@ -482,35 +539,74 @@ jobs:
             }
 
 
-            public static IntPtr FindChildClass(
-                IntPtr parent,
-                string[] names
+            public static bool IsTextBox(
+                IntPtr hWnd
             )
             {
+                string cls =
+                    ClassName(hWnd);
+
+                return
+                    cls.IndexOf(
+                        "ThunderRT6TextBox",
+                        StringComparison.OrdinalIgnoreCase
+                    ) >= 0
+                    ||
+                    cls.IndexOf(
+                        "Edit",
+                        StringComparison.OrdinalIgnoreCase
+                    ) >= 0;
+            }
+
+
+            public static IntPtr FindPasswordTextBox(
+                IntPtr parent
+            )
+            {
+                List<IntPtr> textBoxes =
+                    new List<IntPtr>();
+
                 foreach (
                     IntPtr child in
                     Children(parent)
                 )
                 {
-                    string current =
-                        ClassName(child);
+                    if (!IsTextBox(child))
+                        continue;
 
-                    foreach (
-                        string wanted in
-                        names
+                    textBoxes.Add(child);
+
+                    long style =
+                        GetWindowLongPtr(
+                            child,
+                            GWL_STYLE
+                        ).ToInt64();
+
+                    if (
+                        (style & ES_PASSWORD)
+                        == ES_PASSWORD
                     )
                     {
-                        if (
-                            current.IndexOf(
-                                wanted,
-                                StringComparison.OrdinalIgnoreCase
-                            ) >= 0
-                        )
-                        {
-                            return child;
-                        }
+                        return child;
                     }
                 }
+
+
+                // Fallback para controles VB6:
+                // Usuario = primer TextBox
+                // Contraseña = segundo TextBox
+
+                if (textBoxes.Count >= 2)
+                {
+                    return textBoxes[1];
+                }
+
+
+                if (textBoxes.Count == 1)
+                {
+                    return textBoxes[0];
+                }
+
 
                 return IntPtr.Zero;
             }
@@ -537,45 +633,178 @@ jobs:
             }
 
 
-            // =======================================================
-            // CARGAR TEXTO
-            //
-            // 1) SetWindowText
-            // 2) Fallback SendMessage -> WM_SETTEXT
-            //
-            // El EntryPoint correcto es SendMessage.
-            // =======================================================
+            static void SendVirtualKey(
+                ushort key,
+                bool keyUp
+            )
+            {
+                INPUT input =
+                    new INPUT();
 
-            public static bool SetTextValue(
-                IntPtr hWnd,
+                input.type =
+                    INPUT_KEYBOARD;
+
+                input.U.ki.wVk =
+                    key;
+
+                input.U.ki.wScan =
+                    0;
+
+                input.U.ki.dwFlags =
+                    keyUp
+                    ? KEYEVENTF_KEYUP
+                    : 0;
+
+                input.U.ki.time =
+                    0;
+
+                input.U.ki.dwExtraInfo =
+                    UIntPtr.Zero;
+
+                SendInput(
+                    1,
+                    new INPUT[] { input },
+                    Marshal.SizeOf(typeof(INPUT))
+                );
+            }
+
+
+            static void SendUnicodeCharacter(
+                char character,
+                bool keyUp
+            )
+            {
+                INPUT input =
+                    new INPUT();
+
+                input.type =
+                    INPUT_KEYBOARD;
+
+                input.U.ki.wVk =
+                    0;
+
+                input.U.ki.wScan =
+                    character;
+
+                input.U.ki.dwFlags =
+                    KEYEVENTF_UNICODE |
+                    (
+                        keyUp
+                        ? KEYEVENTF_KEYUP
+                        : 0
+                    );
+
+                input.U.ki.time =
+                    0;
+
+                input.U.ki.dwExtraInfo =
+                    UIntPtr.Zero;
+
+                SendInput(
+                    1,
+                    new INPUT[] { input },
+                    Marshal.SizeOf(typeof(INPUT))
+                );
+            }
+
+
+            public static bool TypeText(
+                IntPtr dialog,
+                IntPtr edit,
                 string value
             )
             {
                 if (
-                    hWnd == IntPtr.Zero ||
-                    !IsWindow(hWnd)
+                    dialog == IntPtr.Zero ||
+                    edit == IntPtr.Zero ||
+                    !IsWindow(edit)
                 )
                 {
                     return false;
                 }
 
-                bool ok =
-                    SetWindowText(
-                        hWnd,
-                        value
+
+                // Traer dialogo al frente
+
+                SetForegroundWindow(
+                    dialog
+                );
+
+                Thread.Sleep(200);
+
+
+                // Dar foco REAL al TextBox de contraseña
+
+                SetFocus(
+                    edit
+                );
+
+                Thread.Sleep(200);
+
+
+                // Ctrl+A
+
+                SendVirtualKey(
+                    VK_CONTROL,
+                    false
+                );
+
+                SendVirtualKey(
+                    VK_A,
+                    false
+                );
+
+                SendVirtualKey(
+                    VK_A,
+                    true
+                );
+
+                SendVirtualKey(
+                    VK_CONTROL,
+                    true
+                );
+
+                Thread.Sleep(100);
+
+
+                // Backspace para limpiar cualquier contenido
+
+                SendVirtualKey(
+                    VK_BACK,
+                    false
+                );
+
+                SendVirtualKey(
+                    VK_BACK,
+                    true
+                );
+
+                Thread.Sleep(100);
+
+
+                // Escritura caracter por caracter.
+                // No requiere escapar caracteres especiales.
+
+                foreach (
+                    char c in
+                    value.ToCharArray()
+                )
+                {
+                    SendUnicodeCharacter(
+                        c,
+                        false
                     );
 
-                if (ok)
-                {
-                    return true;
+                    SendUnicodeCharacter(
+                        c,
+                        true
+                    );
+
+                    Thread.Sleep(25);
                 }
 
-                SendMessageText(
-                    hWnd,
-                    WM_SETTEXT,
-                    IntPtr.Zero,
-                    value
-                );
+
+                Thread.Sleep(500);
 
                 return true;
             }
@@ -584,7 +813,7 @@ jobs:
 
 
         # ============================================================
-        # LISTVIEW NATIVO
+        # LISTVIEW NATIVO - PARTE YA VALIDADA
         # ============================================================
 
         Add-Type @"
@@ -726,13 +955,16 @@ jobs:
                     return false;
                 }
 
+
                 byte[] item =
                     new byte[20];
+
 
                 uint stateValue =
                     check
                     ? 0x2000u
                     : 0x1000u;
+
 
                 Buffer.BlockCopy(
                     BitConverter.GetBytes(
@@ -744,6 +976,7 @@ jobs:
                     4
                 );
 
+
                 Buffer.BlockCopy(
                     BitConverter.GetBytes(
                         LVIS_STATEIMAGEMASK
@@ -754,6 +987,7 @@ jobs:
                     4
                 );
 
+
                 IntPtr remote =
                     VirtualAllocEx(
                         process,
@@ -763,6 +997,7 @@ jobs:
                         MEM_RESERVE,
                         PAGE_READWRITE
                     );
+
 
                 if (
                     remote ==
@@ -776,7 +1011,9 @@ jobs:
                     return false;
                 }
 
+
                 UIntPtr written;
+
 
                 bool result =
                     WriteProcessMemory(
@@ -786,6 +1023,7 @@ jobs:
                         (UIntPtr)item.Length,
                         out written
                     );
+
 
                 if (result)
                 {
@@ -797,6 +1035,7 @@ jobs:
                     );
                 }
 
+
                 VirtualFreeEx(
                     process,
                     remote,
@@ -804,9 +1043,11 @@ jobs:
                     MEM_RELEASE
                 );
 
+
                 CloseHandle(
                     process
                 );
+
 
                 return result;
             }
@@ -869,19 +1110,6 @@ jobs:
             }
 
             return $Builder.ToString()
-        }
-
-
-        function Get-Descendants {
-
-            param(
-                [System.Windows.Automation.AutomationElement]$Root
-            )
-
-            return $Root.FindAll(
-                [System.Windows.Automation.TreeScope]::Descendants,
-                [System.Windows.Automation.Condition]::TrueCondition
-            )
         }
 
 
@@ -1120,6 +1348,7 @@ jobs:
                     $TimeoutSeconds
                 )
 
+
             while (
                 (Get-Date) -lt $End
             ) {
@@ -1128,6 +1357,7 @@ jobs:
                     [NativeUI]::TopWindows(
                         $ProcessId
                     )
+
 
                 foreach (
                     $Window in
@@ -1138,6 +1368,7 @@ jobs:
                         Find-Button `
                             -Window $Window `
                             -Names $ButtonNames
+
 
                     if (
                         $Button -ne
@@ -1151,8 +1382,10 @@ jobs:
                     }
                 }
 
+
                 Start-Sleep -Milliseconds 300
             }
+
 
             return $null
         }
@@ -1170,6 +1403,7 @@ jobs:
                 (Get-Date).AddSeconds(
                     $TimeoutSeconds
                 )
+
 
             while (
                 (Get-Date) -lt $End
@@ -1205,6 +1439,10 @@ jobs:
         }
 
 
+        # ============================================================
+        # NUEVA FUNCION PASSWORD
+        # ============================================================
+
         function Set-Password {
 
             param(
@@ -1212,47 +1450,46 @@ jobs:
                 [string]$Value
             )
 
-            $Edit =
-                [NativeUI]::FindChildClass(
-                    $Dialog,
-                    @(
-                        "ThunderRT6TextBox",
-                        "TextBox",
-                        "Edit"
-                    )
+
+            $PasswordEdit =
+                [NativeUI]::FindPasswordTextBox(
+                    $Dialog
                 )
 
 
             if (
-                $Edit -eq
+                $PasswordEdit -eq
                 [IntPtr]::Zero
             ) {
+
+                Write-Host "[ERROR] No se encontro el TextBox de contraseña."
 
                 return $false
             }
 
 
-            Write-Host "[INFO] Campo contraseña detectado."
-            Write-Host "[INFO] Clase: $([NativeUI]::ClassName($Edit))"
-            Write-Host "[INFO] Handle: $Edit"
+            Write-Host "[OK] TextBox de contraseña identificado."
+            Write-Host "[INFO] Clase : $([NativeUI]::ClassName($PasswordEdit))"
+            Write-Host "[INFO] Handle: $PasswordEdit"
+            Write-Host "[INFO] Se escribira la contraseña mediante teclado real."
+            Write-Host "[INFO] El contenido NO se mostrara en el log."
 
 
             $Result =
-                [NativeUI]::SetTextValue(
-                    $Edit,
+                [NativeUI]::TypeText(
+                    $Dialog,
+                    $PasswordEdit,
                     $Value
                 )
 
 
-            if (
-                -not $Result
-            ) {
+            if (-not $Result) {
 
                 return $false
             }
 
 
-            Start-Sleep -Milliseconds 700
+            Start-Sleep -Milliseconds 500
 
 
             return $true
@@ -1279,7 +1516,8 @@ jobs:
             )
 
 
-            $ConfigExe = $null
+            $ConfigExe =
+                $null
 
 
             foreach (
@@ -1349,7 +1587,7 @@ jobs:
 
 
             # ========================================================
-            # 2 - ABRIR
+            # 2 - ABRIR CWCONFIG
             # ========================================================
 
             $Existing =
@@ -1365,6 +1603,7 @@ jobs:
                         -FilePath $ConfigExe `
                         -PassThru
 
+
                 Write-Host "[OK] cwConfig iniciado."
                 Write-Host "[INFO] PID inicial: $($Started.Id)"
             }
@@ -1378,7 +1617,9 @@ jobs:
             # VENTANA PRINCIPAL
             # ========================================================
 
-            $MainWindow = $null
+            $MainWindow =
+                $null
+
 
             $End =
                 (Get-Date).AddSeconds(
@@ -1468,7 +1709,8 @@ jobs:
 
 
             # ========================================================
-            # 3 - EMPRESAS
+            # 3 - OPERACIONES -> EMPRESAS
+            # YA VALIDADO
             # ========================================================
 
             Write-Host "[3] Abriendo Operaciones -> Empresas..."
@@ -1546,6 +1788,7 @@ jobs:
 
             # ========================================================
             # 4 - LISTVIEW
+            # YA VALIDADO
             # ========================================================
 
             $Lista =
@@ -1582,7 +1825,8 @@ jobs:
 
 
             # ========================================================
-            # 5 - MARCAR
+            # 5 - MARCAR EMPRESAS
+            # YA VALIDADO
             # ========================================================
 
             Write-Host "[5] Marcando empresas..."
@@ -1626,6 +1870,7 @@ jobs:
 
             # ========================================================
             # 6 - CONVERTIR
+            # YA VALIDADO
             # ========================================================
 
             Write-Host "[6] Buscando boton Convertir..."
@@ -1675,6 +1920,7 @@ jobs:
 
             # ========================================================
             # 7 - CONFIRMACION GENERAL
+            # YA VALIDADO
             # ========================================================
 
             Write-Host "[7] Esperando confirmacion general..."
@@ -1699,14 +1945,8 @@ jobs:
             }
 
 
-            $TextoGeneral =
-                [NativeUI]::CombinedText(
-                    $General
-                )
-
-
             Write-Host "[OK] Confirmacion general detectada:"
-            Write-Host "     $TextoGeneral"
+            Write-Host "     $([NativeUI]::CombinedText($General))"
 
 
             [void](
@@ -1736,7 +1976,8 @@ jobs:
             # 8 - PROCESAR EMPRESAS
             # ========================================================
 
-            $Convertidas = 0
+            $Convertidas =
+                0
 
 
             for (
@@ -1754,6 +1995,8 @@ jobs:
 
                 # ====================================================
                 # CONTRASEÑA
+                #
+                # ESTE ES EL PUNTO ACTUAL DE PRUEBA
                 # ====================================================
 
                 Write-Host "[INFO] Esperando Ingrese contraseña..."
@@ -1793,16 +2036,13 @@ jobs:
                 }
 
 
-                Write-Host "[OK] Contraseña cargada en ThunderRT6TextBox."
-                Write-Host "[INFO] El valor secreto NO se muestra en el log."
+                Write-Host "[OK] Escritura de contraseña enviada."
+                Write-Host "[INFO] Esperando que Softland habilite Aceptar..."
 
 
                 # ====================================================
-                # ESPERAR QUE ACEPTAR SE HABILITE
+                # ACEPTAR
                 # ====================================================
-
-                Write-Host "[INFO] Esperando que Aceptar quede habilitado..."
-
 
                 $Aceptar =
                     Wait-ButtonEnabled `
@@ -1819,11 +2059,11 @@ jobs:
                     [IntPtr]::Zero
                 ) {
 
-                    throw "La contraseña fue cargada pero el boton Aceptar no se habilito."
+                    throw "La contraseña se escribio pero Aceptar no se habilito."
                 }
 
 
-                Write-Host "[OK] Boton Aceptar habilitado."
+                Write-Host "[OK] Aceptar habilitado."
                 Write-Host "[INFO] Presionando Aceptar..."
 
 
@@ -2080,7 +2320,7 @@ jobs:
 
 
             # ========================================================
-            # FIN
+            # FINAL
             # ========================================================
 
             Write-Host ""
@@ -2114,7 +2354,7 @@ jobs:
 
 
         # ============================================================
-        # ERROR
+        # ERROR / DEBUG
         # ============================================================
 
         catch {
