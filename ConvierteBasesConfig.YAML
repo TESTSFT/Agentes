@@ -1,5 +1,11 @@
 trigger: none
 
+parameters:
+- name: debugPauseMinutes
+  displayName: "Minutos para dejar Config abierto"
+  type: number
+  default: 20
+
 pool:
   name: Softland-QA
   demands:
@@ -9,14 +15,17 @@ jobs:
 
 - job: SeleccionarEmpresasSoftland
   displayName: "Seleccionar empresas Softland"
-  timeoutInMinutes: 30
+  timeoutInMinutes: 60
 
   steps:
 
   - checkout: self
 
   - task: PowerShell@2
-    displayName: "Abrir Configuración y seleccionar empresas"
+    displayName: "Abrir Config y seleccionar empresas"
+
+    env:
+      DEBUG_PAUSE_MINUTES: ${{ parameters.debugPauseMinutes }}
 
     inputs:
       targetType: inline
@@ -25,6 +34,8 @@ jobs:
       script: |
 
         $ErrorActionPreference = "Stop"
+
+        $DebugPauseMinutes = [int]$env:DEBUG_PAUSE_MINUTES
 
         Write-Host ""
         Write-Host "=========================================================="
@@ -46,7 +57,7 @@ jobs:
 
 
         # ============================================================
-        # FUNCIONES WIN32 GENERALES
+        # WIN32
         # ============================================================
 
         Add-Type @"
@@ -56,7 +67,9 @@ jobs:
         public class Win32
         {
             [DllImport("user32.dll")]
-            public static extern bool SetForegroundWindow(IntPtr hWnd);
+            public static extern bool SetForegroundWindow(
+                IntPtr hWnd
+            );
 
             [DllImport("user32.dll")]
             public static extern bool ShowWindowAsync(
@@ -79,11 +92,11 @@ jobs:
                 UIntPtr dwExtraInfo
             );
         }
-        "@
+"@
 
 
         # ============================================================
-        # MANEJO NATIVO DE LISTVIEW
+        # LISTVIEW NATIVO
         # ============================================================
 
         Add-Type @"
@@ -93,46 +106,22 @@ jobs:
         public static class NativeListView
         {
             const uint LVM_FIRST = 0x1000;
+            const uint LVM_GETITEMCOUNT = LVM_FIRST + 4;
+            const uint LVM_SETITEMSTATE = LVM_FIRST + 43;
+            const uint LVM_GETITEMSTATE = LVM_FIRST + 44;
 
-            const uint LVM_GETITEMCOUNT =
-                LVM_FIRST + 4;
+            const uint LVIS_STATEIMAGEMASK = 0xF000;
 
-            const uint LVM_SETITEMSTATE =
-                LVM_FIRST + 43;
+            const uint PROCESS_VM_OPERATION = 0x0008;
+            const uint PROCESS_VM_READ = 0x0010;
+            const uint PROCESS_VM_WRITE = 0x0020;
+            const uint PROCESS_QUERY_INFORMATION = 0x0400;
 
-            const uint LVM_GETITEMSTATE =
-                LVM_FIRST + 44;
+            const uint MEM_COMMIT = 0x1000;
+            const uint MEM_RESERVE = 0x2000;
+            const uint MEM_RELEASE = 0x8000;
 
-
-            const uint LVIS_STATEIMAGEMASK =
-                0xF000;
-
-
-            const uint PROCESS_VM_OPERATION =
-                0x0008;
-
-            const uint PROCESS_VM_READ =
-                0x0010;
-
-            const uint PROCESS_VM_WRITE =
-                0x0020;
-
-            const uint PROCESS_QUERY_INFORMATION =
-                0x0400;
-
-
-            const uint MEM_COMMIT =
-                0x1000;
-
-            const uint MEM_RESERVE =
-                0x2000;
-
-            const uint MEM_RELEASE =
-                0x8000;
-
-            const uint PAGE_READWRITE =
-                0x04;
-
+            const uint PAGE_READWRITE = 0x04;
 
             [DllImport("user32.dll")]
             static extern IntPtr SendMessage(
@@ -142,29 +131,20 @@ jobs:
                 IntPtr lParam
             );
 
-
             [DllImport("user32.dll")]
             static extern uint GetWindowThreadProcessId(
                 IntPtr hWnd,
                 out uint processId
             );
 
-
-            [DllImport(
-                "kernel32.dll",
-                SetLastError = true
-            )]
+            [DllImport("kernel32.dll", SetLastError = true)]
             static extern IntPtr OpenProcess(
                 uint processAccess,
                 bool inheritHandle,
                 uint processId
             );
 
-
-            [DllImport(
-                "kernel32.dll",
-                SetLastError = true
-            )]
+            [DllImport("kernel32.dll", SetLastError = true)]
             static extern IntPtr VirtualAllocEx(
                 IntPtr hProcess,
                 IntPtr lpAddress,
@@ -173,11 +153,7 @@ jobs:
                 uint protect
             );
 
-
-            [DllImport(
-                "kernel32.dll",
-                SetLastError = true
-            )]
+            [DllImport("kernel32.dll", SetLastError = true)]
             static extern bool WriteProcessMemory(
                 IntPtr hProcess,
                 IntPtr lpBaseAddress,
@@ -186,11 +162,7 @@ jobs:
                 out UIntPtr numberOfBytesWritten
             );
 
-
-            [DllImport(
-                "kernel32.dll",
-                SetLastError = true
-            )]
+            [DllImport("kernel32.dll", SetLastError = true)]
             static extern bool VirtualFreeEx(
                 IntPtr hProcess,
                 IntPtr lpAddress,
@@ -198,12 +170,10 @@ jobs:
                 uint freeType
             );
 
-
             [DllImport("kernel32.dll")]
             static extern bool CloseHandle(
                 IntPtr handle
             );
-
 
             public static int GetItemCount(
                 IntPtr handle
@@ -217,28 +187,20 @@ jobs:
                 ).ToInt32();
             }
 
-
             public static int GetCheckState(
                 IntPtr handle,
                 int index
             )
             {
-                int state =
-                    SendMessage(
-                        handle,
-                        LVM_GETITEMSTATE,
-                        new IntPtr(index),
-                        new IntPtr(
-                            LVIS_STATEIMAGEMASK
-                        )
-                    ).ToInt32();
+                int state = SendMessage(
+                    handle,
+                    LVM_GETITEMSTATE,
+                    new IntPtr(index),
+                    new IntPtr(LVIS_STATEIMAGEMASK)
+                ).ToInt32();
 
-
-                return (
-                    state & 0xF000
-                ) >> 12;
+                return (state & 0xF000) >> 12;
             }
-
 
             public static bool SetChecked(
                 IntPtr handle,
@@ -248,107 +210,69 @@ jobs:
             {
                 uint processId;
 
-
                 GetWindowThreadProcessId(
                     handle,
                     out processId
                 );
 
-
-                IntPtr process =
-                    OpenProcess(
-                        PROCESS_VM_OPERATION |
-                        PROCESS_VM_READ |
-                        PROCESS_VM_WRITE |
-                        PROCESS_QUERY_INFORMATION,
-                        false,
-                        processId
-                    );
-
+                IntPtr process = OpenProcess(
+                    PROCESS_VM_OPERATION |
+                    PROCESS_VM_READ |
+                    PROCESS_VM_WRITE |
+                    PROCESS_QUERY_INFORMATION,
+                    false,
+                    processId
+                );
 
                 if (process == IntPtr.Zero)
                     return false;
 
-
-                /*
-                    Campos iniciales LVITEM:
-
-                    mask       offset 0
-                    iItem      offset 4
-                    iSubItem   offset 8
-                    state      offset 12
-                    stateMask  offset 16
-                */
-
-
-                byte[] lvItem =
-                    new byte[20];
-
+                byte[] lvItem = new byte[20];
 
                 uint stateValue =
                     check
                     ? 0x2000u
                     : 0x1000u;
 
-
                 Buffer.BlockCopy(
-                    BitConverter.GetBytes(
-                        stateValue
-                    ),
+                    BitConverter.GetBytes(stateValue),
                     0,
                     lvItem,
                     12,
                     4
                 );
 
-
                 Buffer.BlockCopy(
-                    BitConverter.GetBytes(
-                        LVIS_STATEIMAGEMASK
-                    ),
+                    BitConverter.GetBytes(LVIS_STATEIMAGEMASK),
                     0,
                     lvItem,
                     16,
                     4
                 );
 
+                IntPtr remoteMemory = VirtualAllocEx(
+                    process,
+                    IntPtr.Zero,
+                    (UIntPtr)lvItem.Length,
+                    MEM_COMMIT | MEM_RESERVE,
+                    PAGE_READWRITE
+                );
 
-                IntPtr remoteMemory =
-                    VirtualAllocEx(
-                        process,
-                        IntPtr.Zero,
-                        (UIntPtr)lvItem.Length,
-                        MEM_COMMIT |
-                        MEM_RESERVE,
-                        PAGE_READWRITE
-                    );
-
-
-                if (
-                    remoteMemory ==
-                    IntPtr.Zero
-                )
+                if (remoteMemory == IntPtr.Zero)
                 {
-                    CloseHandle(
-                        process
-                    );
-
+                    CloseHandle(process);
                     return false;
                 }
 
-
                 UIntPtr written;
 
-
-                bool ok =
-                    WriteProcessMemory(
-                        process,
-                        remoteMemory,
-                        lvItem,
-                        (UIntPtr)lvItem.Length,
-                        out written
-                    );
-
+                bool ok = WriteProcessMemory(
+                    process,
+                    remoteMemory,
+                    lvItem,
+                    (UIntPtr)lvItem.Length,
+                    out written
+                );
 
                 if (ok)
                 {
@@ -360,7 +284,6 @@ jobs:
                     );
                 }
 
-
                 VirtualFreeEx(
                     process,
                     remoteMemory,
@@ -368,16 +291,12 @@ jobs:
                     MEM_RELEASE
                 );
 
-
-                CloseHandle(
-                    process
-                );
-
+                CloseHandle(process);
 
                 return ok;
             }
         }
-        "@
+"@
 
 
         # ============================================================
@@ -390,12 +309,9 @@ jobs:
                 [string]$Text
             )
 
-            if (
-                $null -eq $Text
-            ) {
+            if ($null -eq $Text) {
                 return ""
             }
-
 
             $Text =
                 $Text.Replace(
@@ -403,27 +319,20 @@ jobs:
                     ""
                 ).Trim().ToLowerInvariant()
 
-
             $normalized =
                 $Text.Normalize(
                     [Text.NormalizationForm]::FormD
                 )
 
-
             $builder =
                 New-Object Text.StringBuilder
 
-
-            foreach (
-                $char in
-                $normalized.ToCharArray()
-            ) {
+            foreach ($char in $normalized.ToCharArray()) {
 
                 $category =
                     [Globalization.CharUnicodeInfo]::GetUnicodeCategory(
                         $char
                     )
-
 
                 if (
                     $category -ne
@@ -436,10 +345,8 @@ jobs:
                 }
             }
 
-
             return $builder.ToString()
         }
-
 
 
         function Get-Descendants {
@@ -448,7 +355,6 @@ jobs:
                 [System.Windows.Automation.AutomationElement]$Root
             )
 
-
             return $Root.FindAll(
                 [System.Windows.Automation.TreeScope]::Descendants,
                 [System.Windows.Automation.Condition]::TrueCondition
@@ -456,8 +362,27 @@ jobs:
         }
 
 
+        function Get-ElementByClass {
 
-        function Get-ElementByIdAndName {
+            param(
+                [System.Windows.Automation.AutomationElement]$Root,
+                [string]$ClassName
+            )
+
+            $condition =
+                New-Object System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::ClassNameProperty,
+                    $ClassName
+                )
+
+            return $Root.FindFirst(
+                [System.Windows.Automation.TreeScope]::Descendants,
+                $condition
+            )
+        }
+
+
+        function Find-MenuItem {
 
             param(
                 [System.Windows.Automation.AutomationElement]$Root,
@@ -467,66 +392,120 @@ jobs:
                 [string]$Name
             )
 
+            # --------------------------------------------------------
+            # 1. BUSCAR POR ID + NAME
+            # --------------------------------------------------------
 
-            $IdCondition =
-                New-Object System.Windows.Automation.PropertyCondition(
-                    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
-                    $AutomationId
-                )
+            foreach ($Element in (Get-Descendants -Root $Root)) {
 
+                try {
 
-            $NameCondition =
-                New-Object System.Windows.Automation.PropertyCondition(
-                    [System.Windows.Automation.AutomationElement]::NameProperty,
-                    $Name
-                )
+                    if (
+                        $Element.Current.ControlType -eq
+                        [System.Windows.Automation.ControlType]::MenuItem
+                    ) {
 
+                        if (
+                            $Element.Current.AutomationId -eq $AutomationId -and
+                            (Normalize-Text $Element.Current.Name) -eq
+                            (Normalize-Text $Name)
+                        ) {
 
-            $TypeCondition =
-                New-Object System.Windows.Automation.PropertyCondition(
-                    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-                    [System.Windows.Automation.ControlType]::MenuItem
-                )
-
-
-            $Condition =
-                New-Object System.Windows.Automation.AndCondition(
-                    $IdCondition,
-                    $NameCondition,
-                    $TypeCondition
-                )
+                            return $Element
+                        }
+                    }
+                }
+                catch {
+                }
+            }
 
 
-            return $Root.FindFirst(
-                [System.Windows.Automation.TreeScope]::Descendants,
-                $Condition
-            )
+            # --------------------------------------------------------
+            # 2. FALLBACK SOLO POR AUTOMATION ID
+            # --------------------------------------------------------
+
+            foreach ($Element in (Get-Descendants -Root $Root)) {
+
+                try {
+
+                    if (
+                        $Element.Current.AutomationId -eq $AutomationId
+                    ) {
+
+                        return $Element
+                    }
+                }
+                catch {
+                }
+            }
+
+
+            # --------------------------------------------------------
+            # 3. FALLBACK POR NOMBRE
+            # --------------------------------------------------------
+
+            foreach ($Element in (Get-Descendants -Root $Root)) {
+
+                try {
+
+                    if (
+                        (Normalize-Text $Element.Current.Name) -eq
+                        (Normalize-Text $Name)
+                    ) {
+
+                        return $Element
+                    }
+                }
+                catch {
+                }
+            }
+
+
+            return $null
         }
 
 
-
-        function Get-ElementByClass {
+        function Dump-MenuItems {
 
             param(
-                [System.Windows.Automation.AutomationElement]$Root,
-
-                [string]$ClassName
+                [System.Windows.Automation.AutomationElement]$Root
             )
 
+            Write-Host ""
+            Write-Host "----------------------------------------------------------"
+            Write-Host " MENU ITEMS DETECTADOS POR EL AGENTE"
+            Write-Host "----------------------------------------------------------"
 
-            $condition =
-                New-Object System.Windows.Automation.PropertyCondition(
-                    [System.Windows.Automation.AutomationElement]::ClassNameProperty,
-                    $ClassName
-                )
+            $Count = 0
 
+            foreach ($Element in (Get-Descendants -Root $Root)) {
 
-            return $Root.FindFirst(
-                [System.Windows.Automation.TreeScope]::Descendants,
-                $condition
-            )
+                try {
+
+                    if (
+                        $Element.Current.ControlType -eq
+                        [System.Windows.Automation.ControlType]::MenuItem
+                    ) {
+
+                        $Count++
+
+                        Write-Host (
+                            "MenuItem #{0} | Name=[{1}] | AutomationId=[{2}] | Class=[{3}]" -f
+                            $Count,
+                            $Element.Current.Name,
+                            $Element.Current.AutomationId,
+                            $Element.Current.ClassName
+                        )
+                    }
+                }
+                catch {
+                }
+            }
+
+            Write-Host "----------------------------------------------------------"
+            Write-Host "[INFO] Total MenuItem detectados: $Count"
+            Write-Host ""
         }
-
 
 
         function Click-Element {
@@ -535,28 +514,42 @@ jobs:
                 [System.Windows.Automation.AutomationElement]$Element
             )
 
-
-            if (
-                $null -eq $Element
-            ) {
-
+            if ($null -eq $Element) {
                 throw "Se intento hacer clic sobre un elemento inexistente."
             }
 
 
             # --------------------------------------------------------
-            # INVOKE PATTERN
+            # INVOKE
             # --------------------------------------------------------
 
             try {
 
-                $invoke =
+                $Invoke =
                     $Element.GetCurrentPattern(
                         [System.Windows.Automation.InvokePattern]::Pattern
                     )
 
+                $Invoke.Invoke()
 
-                $invoke.Invoke()
+                return
+            }
+            catch {
+            }
+
+
+            # --------------------------------------------------------
+            # EXPAND COLLAPSE
+            # --------------------------------------------------------
+
+            try {
+
+                $Expand =
+                    $Element.GetCurrentPattern(
+                        [System.Windows.Automation.ExpandCollapsePattern]::Pattern
+                    )
+
+                $Expand.Expand()
 
                 return
             }
@@ -570,13 +563,12 @@ jobs:
 
             try {
 
-                $legacy =
+                $Legacy =
                     $Element.GetCurrentPattern(
                         [System.Windows.Automation.LegacyIAccessiblePattern]::Pattern
                     )
 
-
-                $legacy.DoDefaultAction()
+                $Legacy.DoDefaultAction()
 
                 return
             }
@@ -588,33 +580,27 @@ jobs:
             # CLICK FISICO
             # --------------------------------------------------------
 
-            $rect =
+            $Rect =
                 $Element.Current.BoundingRectangle
 
-
-            $x =
+            $X =
                 [int](
-                    $rect.Left +
-                    ($rect.Width / 2)
+                    $Rect.Left +
+                    ($Rect.Width / 2)
                 )
 
-
-            $y =
+            $Y =
                 [int](
-                    $rect.Top +
-                    ($rect.Height / 2)
+                    $Rect.Top +
+                    ($Rect.Height / 2)
                 )
-
 
             [Win32]::SetCursorPos(
-                $x,
-                $y
+                $X,
+                $Y
             ) | Out-Null
 
-
-            Start-Sleep `
-                -Milliseconds 250
-
+            Start-Sleep -Milliseconds 250
 
             [Win32]::mouse_event(
                 0x0002,
@@ -623,7 +609,6 @@ jobs:
                 0,
                 [UIntPtr]::Zero
             )
-
 
             [Win32]::mouse_event(
                 0x0004,
@@ -636,616 +621,597 @@ jobs:
 
 
         # ============================================================
-        # 1 - BUSCAR CWCONFIG.EXE
+        # EJECUCION
         # ============================================================
 
-        Write-Host "[1] Buscando cwConfig.exe..."
+        try {
 
 
-        $PossiblePaths = @(
+            # ========================================================
+            # 1 - BUSCAR CWCONFIG.EXE
+            # ========================================================
 
-            "C:\Program Files (x86)\Softland\Cliente\Config\cwConfig.exe",
-
-            "C:\Program Files\Softland\Cliente\Config\cwConfig.exe"
-        )
-
-
-        $ConfigExe =
-            $null
+            Write-Host "[1] Buscando cwConfig.exe..."
 
 
-        foreach (
-            $Path in
-            $PossiblePaths
-        ) {
+            $PossiblePaths = @(
 
-            Write-Host "[INFO] Probando: $Path"
+                "C:\Program Files (x86)\Softland\Cliente\Config\cwConfig.exe",
 
-
-            if (
-                Test-Path $Path
-            ) {
-
-                $ConfigExe =
-                    $Path
-
-                break
-            }
-        }
-
-
-        # ============================================================
-        # BUSQUEDA ALTERNATIVA
-        # ============================================================
-
-        if (
-            -not $ConfigExe
-        ) {
-
-            Write-Host "[INFO] No se encontro en las rutas estandar."
-            Write-Host "[INFO] Buscando dentro de Softland..."
-
-
-            $SearchRoots = @(
-
-                "C:\Program Files (x86)\Softland",
-
-                "C:\Program Files\Softland"
+                "C:\Program Files\Softland\Cliente\Config\cwConfig.exe"
             )
 
 
-            foreach (
-                $RootPath in
-                $SearchRoots
-            ) {
-
-                if (
-                    Test-Path $RootPath
-                ) {
-
-                    $Found =
-                        Get-ChildItem `
-                            -Path $RootPath `
-                            -Filter "cwConfig.exe" `
-                            -File `
-                            -Recurse `
-                            -ErrorAction SilentlyContinue |
-                        Select-Object `
-                            -First 1
+            $ConfigExe =
+                $null
 
 
-                    if (
-                        $Found
-                    ) {
+            foreach ($Path in $PossiblePaths) {
 
-                        $ConfigExe =
-                            $Found.FullName
+                Write-Host "[INFO] Probando: $Path"
 
-                        break
+                if (Test-Path $Path) {
+
+                    $ConfigExe =
+                        $Path
+
+                    break
+                }
+            }
+
+
+            # ========================================================
+            # BUSQUEDA ALTERNATIVA
+            # ========================================================
+
+            if (-not $ConfigExe) {
+
+                Write-Host "[INFO] No se encontro en las rutas estandar."
+                Write-Host "[INFO] Buscando dentro de Softland..."
+
+
+                $SearchRoots = @(
+
+                    "C:\Program Files (x86)\Softland",
+
+                    "C:\Program Files\Softland"
+                )
+
+
+                foreach ($RootPath in $SearchRoots) {
+
+                    if (Test-Path $RootPath) {
+
+                        $Found =
+                            Get-ChildItem `
+                                -Path $RootPath `
+                                -Filter "cwConfig.exe" `
+                                -File `
+                                -Recurse `
+                                -ErrorAction SilentlyContinue |
+                            Select-Object -First 1
+
+
+                        if ($Found) {
+
+                            $ConfigExe =
+                                $Found.FullName
+
+                            break
+                        }
                     }
                 }
             }
-        }
 
 
-        if (
-            -not $ConfigExe
-        ) {
+            if (-not $ConfigExe) {
 
-            throw "No se encontro cwConfig.exe en el servidor $env:COMPUTERNAME."
-        }
+                throw "No se encontro cwConfig.exe."
+            }
 
 
-        Write-Host ""
-        Write-Host "[OK] Ejecutable encontrado:"
-        Write-Host "     $ConfigExe"
-        Write-Host ""
+            Write-Host ""
+            Write-Host "[OK] Ejecutable encontrado:"
+            Write-Host "     $ConfigExe"
+            Write-Host ""
 
 
-        # ============================================================
-        # 2 - ABRIR CONFIGURACION
-        # ============================================================
+            # ========================================================
+            # 2 - ABRIR CONFIG
+            # ========================================================
 
-        Write-Host "[2] Abriendo Configuracion del Sistema de Gestion..."
-
-
-        Start-Process `
-            -FilePath $ConfigExe |
-            Out-Null
+            Write-Host "[2] Abriendo Configuracion del Sistema de Gestion..."
 
 
-        Write-Host "[INFO] Esperando ventana principal..."
+            $ConfigProcess =
+                Start-Process `
+                    -FilePath $ConfigExe `
+                    -PassThru
 
 
-        # ============================================================
-        # 3 - BUSCAR VENTANA PRINCIPAL
-        # ============================================================
-
-        $MainWindow =
-            $null
+            Write-Host "[INFO] PID inicial: $($ConfigProcess.Id)"
+            Write-Host "[INFO] Esperando ventana principal..."
 
 
-        $Timeout =
-            (Get-Date).AddSeconds(
-                60
-            )
+            # ========================================================
+            # DETECTAR VENTANA
+            # ========================================================
+
+            $MainWindow =
+                $null
 
 
-        while (
-            (Get-Date) -lt $Timeout
-        ) {
+            $Timeout =
+                (Get-Date).AddSeconds(
+                    60
+                )
+
+
+            while (
+                (Get-Date) -lt $Timeout
+            ) {
+
+                $Desktop =
+                    [System.Windows.Automation.AutomationElement]::RootElement
+
+
+                $Windows =
+                    $Desktop.FindAll(
+                        [System.Windows.Automation.TreeScope]::Children,
+                        [System.Windows.Automation.Condition]::TrueCondition
+                    )
+
+
+                foreach ($Window in $Windows) {
+
+                    try {
+
+                        $Title =
+                            Normalize-Text `
+                                $Window.Current.Name
+
+
+                        if (
+                            $Title -like
+                            "*configuracion del sistema de gestion*" -or
+
+                            $Title -like
+                            "*configuracion de softland*"
+                        ) {
+
+                            $MainWindow =
+                                $Window
+
+                            break
+                        }
+                    }
+                    catch {
+                    }
+                }
+
+
+                if ($MainWindow) {
+                    break
+                }
+
+
+                Start-Sleep -Seconds 1
+            }
+
+
+            if (-not $MainWindow) {
+
+                throw "No se encontro la ventana Configuracion del Sistema de Gestion."
+            }
+
+
+            $MainHandle =
+                [IntPtr]$MainWindow.Current.NativeWindowHandle
+
+
+            [Win32]::ShowWindowAsync(
+                $MainHandle,
+                9
+            ) | Out-Null
+
+
+            [Win32]::SetForegroundWindow(
+                $MainHandle
+            ) | Out-Null
+
+
+            Write-Host "[OK] Configuracion de Softland abierta."
+            Write-Host "[INFO] PID real: $($MainWindow.Current.ProcessId)"
+            Write-Host ""
+
+
+            # ========================================================
+            # 3 - OPERACIONES
+            # ========================================================
+
+            Write-Host "[3] Navegando a Operaciones -> Empresas..."
+            Write-Host ""
+
+            Write-Host "[INFO] Buscando Operaciones..."
+
+
+            $Operaciones =
+                Find-MenuItem `
+                    -Root $MainWindow `
+                    -AutomationId "Item 2" `
+                    -Name "Operaciones"
+
+
+            # --------------------------------------------------------
+            # SI NO LO ENCUENTRA EN MAINWINDOW
+            # PROBAR DESDE EL ESCRITORIO COMPLETO
+            # --------------------------------------------------------
+
+            if (-not $Operaciones) {
+
+                Write-Host "[WARN] No se encontro dentro de MainWindow."
+                Write-Host "[INFO] Buscando Operaciones desde RootElement..."
+
+
+                $Desktop =
+                    [System.Windows.Automation.AutomationElement]::RootElement
+
+
+                $Operaciones =
+                    Find-MenuItem `
+                        -Root $Desktop `
+                        -AutomationId "Item 2" `
+                        -Name "Operaciones"
+            }
+
+
+            if (-not $Operaciones) {
+
+                Dump-MenuItems `
+                    -Root $MainWindow
+
+
+                throw "No se encontro Operaciones. Revise el listado de MenuItem generado en el log."
+            }
+
+
+            Write-Host "[OK] Operaciones detectado."
+            Write-Host "[INFO] Nombre       : $($Operaciones.Current.Name)"
+            Write-Host "[INFO] AutomationId : $($Operaciones.Current.AutomationId)"
+            Write-Host "[INFO] Clase        : $($Operaciones.Current.ClassName)"
+            Write-Host "[INFO] Tipo         : $($Operaciones.Current.ControlType.ProgrammaticName)"
+
+
+            Write-Host ""
+            Write-Host "[INFO] Abriendo Operaciones..."
+
+
+            Click-Element `
+                -Element $Operaciones
+
+
+            Start-Sleep -Seconds 2
+
+
+            Write-Host "[OK] Click realizado sobre Operaciones."
+
+
+            # ========================================================
+            # 4 - EMPRESAS
+            # ========================================================
+
+            Write-Host ""
+            Write-Host "[INFO] Buscando Empresas..."
+
 
             $Desktop =
                 [System.Windows.Automation.AutomationElement]::RootElement
 
 
-            $Windows =
-                $Desktop.FindAll(
-                    [System.Windows.Automation.TreeScope]::Children,
-                    [System.Windows.Automation.Condition]::TrueCondition
-                )
-
-
-            foreach (
-                $Window in
-                $Windows
-            ) {
-
-                try {
-
-                    $Title =
-                        Normalize-Text `
-                            $Window.Current.Name
-
-
-                    if (
-                        $Title -like
-                        "*configuracion del sistema de gestion*" -or
-
-                        $Title -like
-                        "*configuracion de softland*"
-                    ) {
-
-                        $MainWindow =
-                            $Window
-
-                        break
-                    }
-                }
-                catch {
-                }
-            }
-
-
-            if (
-                $MainWindow
-            ) {
-                break
-            }
-
-
-            Start-Sleep `
-                -Seconds 1
-        }
-
-
-        if (
-            -not $MainWindow
-        ) {
-
-            throw "No se encontro la ventana Configuracion del Sistema de Gestion."
-        }
-
-
-        $MainHandle =
-            [IntPtr]$MainWindow.Current.NativeWindowHandle
-
-
-        [Win32]::ShowWindowAsync(
-            $MainHandle,
-            9
-        ) | Out-Null
-
-
-        [Win32]::SetForegroundWindow(
-            $MainHandle
-        ) | Out-Null
-
-
-        Write-Host "[OK] Configuracion de Softland abierta."
-        Write-Host "[INFO] PID: $($MainWindow.Current.ProcessId)"
-        Write-Host ""
-
-
-        # ============================================================
-        # 4 - OPERACIONES
-        #
-        # AutomationId = Item 2
-        # Name         = Operaciones
-        # ============================================================
-
-        Write-Host "[3] Navegando a Operaciones -> Empresas..."
-        Write-Host ""
-
-
-        Write-Host "[INFO] Buscando Operaciones..."
-
-
-        $Operaciones =
-            Get-ElementByIdAndName `
-                -Root $MainWindow `
-                -AutomationId "Item 2" `
-                -Name "Operaciones"
-
-
-        if (
-            -not $Operaciones
-        ) {
-
-            throw "No se encontro Operaciones (AutomationId=Item 2)."
-        }
-
-
-        Write-Host "[OK] Operaciones detectado."
-        Write-Host "[INFO] Nombre       : $($Operaciones.Current.Name)"
-        Write-Host "[INFO] AutomationId : $($Operaciones.Current.AutomationId)"
-
-
-        # ============================================================
-        # ABRIR OPERACIONES
-        # ============================================================
-
-        Write-Host "[INFO] Abriendo Operaciones..."
-
-
-        try {
-
-            $Expand =
-                $Operaciones.GetCurrentPattern(
-                    [System.Windows.Automation.ExpandCollapsePattern]::Pattern
-                )
-
-
-            $Expand.Expand()
-        }
-        catch {
-
-            Click-Element `
-                -Element $Operaciones
-        }
-
-
-        Start-Sleep `
-            -Seconds 2
-
-
-        Write-Host "[OK] Operaciones abierto."
-
-
-        # ============================================================
-        # 5 - EMPRESAS
-        #
-        # AutomationId = Item 9
-        # Name         = Empresas
-        # ============================================================
-
-        Write-Host ""
-        Write-Host "[INFO] Buscando Empresas..."
-
-
-        $Desktop =
-            [System.Windows.Automation.AutomationElement]::RootElement
-
-
-        $Empresas =
-            $null
-
-
-        $TimeoutEmpresas =
-            (Get-Date).AddSeconds(
-                15
-            )
-
-
-        while (
-            (Get-Date) -lt $TimeoutEmpresas -and
-            -not $Empresas
-        ) {
-
             $Empresas =
-                Get-ElementByIdAndName `
-                    -Root $Desktop `
-                    -AutomationId "Item 9" `
-                    -Name "Empresas"
+                $null
 
 
-            if (
+            $TimeoutEmpresas =
+                (Get-Date).AddSeconds(
+                    15
+                )
+
+
+            while (
+                (Get-Date) -lt $TimeoutEmpresas -and
                 -not $Empresas
             ) {
 
-                Start-Sleep `
-                    -Milliseconds 300
+                $Empresas =
+                    Find-MenuItem `
+                        -Root $Desktop `
+                        -AutomationId "Item 9" `
+                        -Name "Empresas"
+
+
+                if (-not $Empresas) {
+
+                    Start-Sleep -Milliseconds 300
+                }
             }
-        }
 
 
-        if (
-            -not $Empresas
-        ) {
+            if (-not $Empresas) {
 
-            throw "Se abrio Operaciones pero no se encontro Empresas (AutomationId=Item 9)."
-        }
+                Dump-MenuItems `
+                    -Root $Desktop
 
 
-        Write-Host "[OK] Empresas detectado."
-        Write-Host "[INFO] Nombre       : $($Empresas.Current.Name)"
-        Write-Host "[INFO] AutomationId : $($Empresas.Current.AutomationId)"
+                throw "Operaciones fue abierto pero no se encontro Empresas."
+            }
 
 
-        # ============================================================
-        # ABRIR EMPRESAS
-        # ============================================================
-
-        Write-Host "[INFO] Abriendo Empresas..."
-
-
-        Click-Element `
-            -Element $Empresas
+            Write-Host "[OK] Empresas detectado."
+            Write-Host "[INFO] Nombre       : $($Empresas.Current.Name)"
+            Write-Host "[INFO] AutomationId : $($Empresas.Current.AutomationId)"
+            Write-Host "[INFO] Clase        : $($Empresas.Current.ClassName)"
+            Write-Host ""
 
 
-        Start-Sleep `
-            -Seconds 3
+            Write-Host "[INFO] Abriendo Empresas..."
 
 
-        Write-Host "[OK] Se ejecuto la apertura de Empresas."
-        Write-Host ""
+            Click-Element `
+                -Element $Empresas
 
 
-        # ============================================================
-        # 6 - DETECTAR LISTVIEW20WNDCLASS
-        # ============================================================
-
-        Write-Host "[4] Buscando grilla ListView20WndClass..."
+            Start-Sleep -Seconds 3
 
 
-        $ListaEmpresas =
-            $null
+            # ========================================================
+            # 5 - LISTVIEW
+            # ========================================================
 
+            Write-Host ""
+            Write-Host "[4] Buscando grilla ListView20WndClass..."
 
-        $TimeoutLista =
-            (Get-Date).AddSeconds(
-                15
-            )
-
-
-        while (
-            (Get-Date) -lt $TimeoutLista -and
-            -not $ListaEmpresas
-        ) {
 
             $ListaEmpresas =
-                Get-ElementByClass `
-                    -Root $MainWindow `
-                    -ClassName "ListView20WndClass"
+                $null
 
 
-            if (
+            $TimeoutLista =
+                (Get-Date).AddSeconds(
+                    15
+                )
+
+
+            while (
+                (Get-Date) -lt $TimeoutLista -and
                 -not $ListaEmpresas
             ) {
 
+                $ListaEmpresas =
+                    Get-ElementByClass `
+                        -Root $MainWindow `
+                        -ClassName "ListView20WndClass"
+
+
+                if (-not $ListaEmpresas) {
+
+                    Start-Sleep -Milliseconds 300
+                }
+            }
+
+
+            if (-not $ListaEmpresas) {
+
+                throw "No se encontro la grilla ListView20WndClass."
+            }
+
+
+            $ListHandle =
+                [IntPtr]$ListaEmpresas.Current.NativeWindowHandle
+
+
+            Write-Host "[OK] Grilla detectada."
+            Write-Host "[INFO] Clase  : $($ListaEmpresas.Current.ClassName)"
+            Write-Host "[INFO] Handle : $ListHandle"
+            Write-Host ""
+
+
+            # ========================================================
+            # 6 - CANTIDAD
+            # ========================================================
+
+            $CantidadEmpresas =
+                [NativeListView]::GetItemCount(
+                    $ListHandle
+                )
+
+
+            Write-Host "[INFO] Empresas detectadas: $CantidadEmpresas"
+
+
+            if ($CantidadEmpresas -le 0) {
+
+                throw "La grilla no contiene empresas."
+            }
+
+
+            # ========================================================
+            # 7 - MARCAR TODAS
+            # ========================================================
+
+            Write-Host ""
+            Write-Host "[5] Marcando todas las empresas..."
+            Write-Host ""
+
+
+            for (
+                $i = 0;
+                $i -lt $CantidadEmpresas;
+                $i++
+            ) {
+
+                $Estado =
+                    [NativeListView]::GetCheckState(
+                        $ListHandle,
+                        $i
+                    )
+
+
+                Write-Host "[INFO] Fila $($i + 1) - Estado inicial: $Estado"
+
+
+                if ($Estado -ne 2) {
+
+                    $Resultado =
+                        [NativeListView]::SetChecked(
+                            $ListHandle,
+                            $i,
+                            $true
+                        )
+
+
+                    if (-not $Resultado) {
+
+                        throw "No fue posible marcar la fila $($i + 1)."
+                    }
+                }
+
+
+                Start-Sleep -Milliseconds 150
+            }
+
+
+            # ========================================================
+            # 8 - VERIFICAR
+            # ========================================================
+
+            Write-Host ""
+            Write-Host "[6] Verificando resultado..."
+            Write-Host ""
+
+
+            $Marcadas =
+                0
+
+
+            for (
+                $i = 0;
+                $i -lt $CantidadEmpresas;
+                $i++
+            ) {
+
+                $Estado =
+                    [NativeListView]::GetCheckState(
+                        $ListHandle,
+                        $i
+                    )
+
+
+                if ($Estado -eq 2) {
+
+                    $Marcadas++
+
+                    Write-Host "[OK] Fila $($i + 1) marcada."
+                }
+                else {
+
+                    Write-Host "[ERROR] Fila $($i + 1) NO marcada. Estado=$Estado"
+                }
+            }
+
+
+            Write-Host ""
+            Write-Host "=========================================================="
+            Write-Host " RESULTADO"
+            Write-Host "=========================================================="
+            Write-Host ""
+            Write-Host "Empresas detectadas : $CantidadEmpresas"
+            Write-Host "Empresas marcadas   : $Marcadas"
+            Write-Host ""
+
+
+            if ($Marcadas -ne $CantidadEmpresas) {
+
+                throw "No quedaron seleccionadas todas las empresas."
+            }
+
+
+            Write-Host "=========================================================="
+            Write-Host " OK - TODAS LAS EMPRESAS QUEDARON MARCADAS"
+            Write-Host "=========================================================="
+            Write-Host ""
+            Write-Host "[TEST] NO se presionara Convertir."
+            Write-Host ""
+            Write-Host "[DEBUG] Config quedara abierto durante $DebugPauseMinutes minutos."
+            Write-Host "[DEBUG] Revise visualmente que todas las empresas tengan check."
+            Write-Host ""
+
+
+            # ========================================================
+            # MANTENER CONFIG ABIERTO PARA INSPECCION
+            # ========================================================
+
+            if ($DebugPauseMinutes -gt 0) {
+
                 Start-Sleep `
-                    -Milliseconds 300
-            }
-        }
-
-
-        if (
-            -not $ListaEmpresas
-        ) {
-
-            throw "No se encontro la grilla ListView20WndClass."
-        }
-
-
-        $ListHandle =
-            [IntPtr]$ListaEmpresas.Current.NativeWindowHandle
-
-
-        Write-Host "[OK] Grilla detectada."
-        Write-Host "[INFO] Clase  : $($ListaEmpresas.Current.ClassName)"
-        Write-Host "[INFO] Handle : $ListHandle"
-        Write-Host ""
-
-
-        # ============================================================
-        # 7 - OBTENER CANTIDAD DE EMPRESAS
-        # ============================================================
-
-        $CantidadEmpresas =
-            [NativeListView]::GetItemCount(
-                $ListHandle
-            )
-
-
-        Write-Host "[INFO] Empresas encontradas en la grilla: $CantidadEmpresas"
-
-
-        if (
-            $CantidadEmpresas -le 0
-        ) {
-
-            throw "La grilla fue encontrada pero no contiene empresas."
-        }
-
-
-        # ============================================================
-        # 8 - MOSTRAR ESTADO INICIAL
-        # ============================================================
-
-        Write-Host ""
-        Write-Host "[5] Estado inicial de las empresas..."
-        Write-Host ""
-
-
-        for (
-            $i = 0;
-            $i -lt $CantidadEmpresas;
-            $i++
-        ) {
-
-            $Estado =
-                [NativeListView]::GetCheckState(
-                    $ListHandle,
-                    $i
-                )
-
-
-            Write-Host "[INFO] Fila $($i + 1) - Estado: $Estado"
-        }
-
-
-        # ============================================================
-        # 9 - MARCAR TODAS LAS EMPRESAS
-        # ============================================================
-
-        Write-Host ""
-        Write-Host "[6] Marcando todas las empresas..."
-        Write-Host ""
-
-
-        for (
-            $i = 0;
-            $i -lt $CantidadEmpresas;
-            $i++
-        ) {
-
-            $Estado =
-                [NativeListView]::GetCheckState(
-                    $ListHandle,
-                    $i
-                )
-
-
-            # --------------------------------------------------------
-            # Estado 1 = no marcado
-            # Estado 2 = marcado
-            # --------------------------------------------------------
-
-            if (
-                $Estado -eq 2
-            ) {
-
-                Write-Host "[OK] Fila $($i + 1) ya estaba marcada."
-
-                continue
+                    -Seconds ($DebugPauseMinutes * 60)
             }
 
 
-            Write-Host "[INFO] Marcando fila $($i + 1)..."
+            Write-Host "[OK] Prueba finalizada."
 
-
-            $Resultado =
-                [NativeListView]::SetChecked(
-                    $ListHandle,
-                    $i,
-                    $true
-                )
-
-
-            if (
-                -not $Resultado
-            ) {
-
-                throw "No fue posible marcar la fila $($i + 1)."
-            }
-
-
-            Start-Sleep `
-                -Milliseconds 150
+            exit 0
         }
 
+        catch {
 
-        # ============================================================
-        # 10 - VERIFICAR RESULTADO
-        # ============================================================
-
-        Write-Host ""
-        Write-Host "[7] Verificando empresas seleccionadas..."
-        Write-Host ""
+            $MensajeError =
+                $_.Exception.Message
 
 
-        $Marcadas =
-            0
+            Write-Host ""
+            Write-Host "=========================================================="
+            Write-Host " ERROR DURANTE LA AUTOMATIZACION"
+            Write-Host "=========================================================="
+            Write-Host ""
+            Write-Host "Error:"
+            Write-Host $MensajeError
+            Write-Host ""
 
 
-        $NoMarcadas =
-            0
+            $ProcesosConfig =
+                Get-Process `
+                    -Name "cwConfig" `
+                    -ErrorAction SilentlyContinue
 
 
-        for (
-            $i = 0;
-            $i -lt $CantidadEmpresas;
-            $i++
-        ) {
+            if ($ProcesosConfig) {
 
-            $Estado =
-                [NativeListView]::GetCheckState(
-                    $ListHandle,
-                    $i
-                )
+                Write-Host "[DEBUG] cwConfig.exe continua abierto."
 
+                foreach ($Proceso in $ProcesosConfig) {
 
-            if (
-                $Estado -eq 2
-            ) {
-
-                $Marcadas++
-
-
-                Write-Host "[OK] Fila $($i + 1) marcada."
+                    Write-Host "[DEBUG] PID cwConfig: $($Proceso.Id)"
+                }
             }
             else {
 
-                $NoMarcadas++
-
-
-                Write-Host "[ERROR] Fila $($i + 1) NO marcada. Estado=$Estado"
+                Write-Host "[WARN] cwConfig.exe no aparece como proceso activo."
             }
+
+
+            Write-Host ""
+            Write-Host "[DEBUG] Config quedara abierto durante $DebugPauseMinutes minutos."
+            Write-Host "[DEBUG] Puede revisar manualmente donde quedo Softland."
+            Write-Host ""
+
+
+            if ($DebugPauseMinutes -gt 0) {
+
+                Start-Sleep `
+                    -Seconds ($DebugPauseMinutes * 60)
+            }
+
+
+            throw $MensajeError
         }
-
-
-        # ============================================================
-        # RESULTADO
-        # ============================================================
-
-        Write-Host ""
-        Write-Host "=========================================================="
-        Write-Host " RESULTADO DE LA PRUEBA"
-        Write-Host "=========================================================="
-        Write-Host ""
-        Write-Host "Servidor            : $env:COMPUTERNAME"
-        Write-Host "Empresas detectadas : $CantidadEmpresas"
-        Write-Host "Empresas marcadas   : $Marcadas"
-        Write-Host "No marcadas         : $NoMarcadas"
-        Write-Host ""
-
-
-        if (
-            $Marcadas -ne
-            $CantidadEmpresas
-        ) {
-
-            throw "No quedaron seleccionadas todas las empresas."
-        }
-
-
-        Write-Host "=========================================================="
-        Write-Host " OK - TODAS LAS EMPRESAS QUEDARON SELECCIONADAS"
-        Write-Host "=========================================================="
-        Write-Host ""
-        Write-Host "[TEST] El pipeline se detiene en este punto."
-        Write-Host "[TEST] NO se presiona Convertir."
-        Write-Host ""
-
-
-        exit 0
