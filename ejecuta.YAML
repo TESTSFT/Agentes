@@ -1,16 +1,20 @@
 steps:
+
 - powershell: |
+
     Write-Host "=============================================="
-    Write-Host "EJECUTA SETUP - VERSION PASSWORD THUNDERRT6 V5"
+    Write-Host "EJECUTA SETUP - VERSION PASSWORD THUNDERRT6 V6"
     Write-Host "=============================================="
 
+
     # ============================================================
-    # LIBRERÍAS
+    # LIBRERIAS
     # ============================================================
 
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName UIAutomationClient
     Add-Type -AssemblyName UIAutomationTypes
+
 
     # ============================================================
     # VALIDAR AGENTE COMO ADMINISTRADOR
@@ -23,29 +27,119 @@ steps:
     Write-Host "Usuario: $env:USERNAME"
     Write-Host "Session ID: $([System.Diagnostics.Process]::GetCurrentProcess().SessionId)"
 
-    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
-    $esAdmin = $principal.IsInRole(
-        [Security.Principal.WindowsBuiltInRole]::Administrator
-    )
+
+    $identity =
+        [Security.Principal.WindowsIdentity]::GetCurrent()
+
+
+    $principal =
+        New-Object Security.Principal.WindowsPrincipal(
+            $identity
+        )
+
+
+    $esAdmin =
+        $principal.IsInRole(
+            [Security.Principal.WindowsBuiltInRole]::Administrator
+        )
+
 
     Write-Host "Ejecutando elevado como Administrador: $esAdmin"
 
+
     if (-not $esAdmin) {
-        throw "El Azure DevOps Agent no está ejecutando el pipeline como Administrador."
+
+        throw "El Azure DevOps Agent no esta ejecutando el pipeline como Administrador."
     }
+
 
     # ============================================================
     # API WIN32
+    #
+    # Incluye ahora la misma tecnica que funciono en cwConfig:
+    #
+    # - deteccion del ThunderRT6TextBox correcto
+    # - click fisico
+    # - WM_CHAR
+    # - fallback SendInput
     # ============================================================
 
     Add-Type @"
     using System;
     using System.Text;
     using System.Runtime.InteropServices;
+    using System.Threading;
 
-    public static class Win32 {
-        public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+    public static class Win32
+    {
+        public const uint WM_CHAR = 0x0102;
+        public const uint WM_CLEAR = 0x0303;
+        public const uint EM_SETSEL = 0x00B1;
+
+        public const int GWL_STYLE = -16;
+        public const long ES_PASSWORD = 0x0020;
+
+        public const uint INPUT_KEYBOARD = 1;
+
+        public const uint KEYEVENTF_KEYUP = 0x0002;
+        public const uint KEYEVENTF_UNICODE = 0x0004;
+
+        public const ushort VK_CONTROL = 0x11;
+        public const ushort VK_A = 0x41;
+        public const ushort VK_BACK = 0x08;
+
+        public const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+        public const uint MOUSEEVENTF_LEFTUP = 0x0004;
+
+
+        public delegate bool EnumWindowsProc(
+            IntPtr hWnd,
+            IntPtr lParam
+        );
+
+
+        public delegate bool EnumChildWindowsProc(
+            IntPtr hWnd,
+            IntPtr lParam
+        );
+
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct RECT
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
+        }
+
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct INPUT
+        {
+            public uint type;
+            public InputUnion U;
+        }
+
+
+        [StructLayout(LayoutKind.Explicit)]
+        public struct InputUnion
+        {
+            [FieldOffset(0)]
+            public KEYBDINPUT ki;
+        }
+
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct KEYBDINPUT
+        {
+            public ushort wVk;
+            public ushort wScan;
+            public uint dwFlags;
+            public uint time;
+            public UIntPtr dwExtraInfo;
+        }
+
 
         [DllImport("user32.dll")]
         public static extern bool EnumWindows(
@@ -53,21 +147,35 @@ steps:
             IntPtr lParam
         );
 
-        [DllImport("user32.dll")]
-        public static extern bool IsWindowVisible(IntPtr hWnd);
 
         [DllImport("user32.dll")]
-        public static extern bool IsWindow(IntPtr hWnd);
+        public static extern bool IsWindowVisible(
+            IntPtr hWnd
+        );
+
 
         [DllImport("user32.dll")]
-        public static extern int GetWindowTextLength(IntPtr hWnd);
+        public static extern bool IsWindow(
+            IntPtr hWnd
+        );
 
-        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+
+        [DllImport("user32.dll")]
+        public static extern int GetWindowTextLength(
+            IntPtr hWnd
+        );
+
+
+        [DllImport(
+            "user32.dll",
+            CharSet = CharSet.Unicode
+        )]
         public static extern int GetWindowText(
             IntPtr hWnd,
             StringBuilder lpString,
             int nMaxCount
         );
+
 
         [DllImport("user32.dll")]
         public static extern uint GetWindowThreadProcessId(
@@ -75,13 +183,25 @@ steps:
             out uint lpdwProcessId
         );
 
-        [DllImport("user32.dll")]
-        public static extern bool SetForegroundWindow(IntPtr hWnd);
 
         [DllImport("user32.dll")]
-        public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+        public static extern bool SetForegroundWindow(
+            IntPtr hWnd
+        );
 
-        public delegate bool EnumChildWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        public static extern bool ShowWindowAsync(
+            IntPtr hWnd,
+            int nCmdShow
+        );
+
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr SetFocus(
+            IntPtr hWnd
+        );
+
 
         [DllImport("user32.dll")]
         public static extern bool EnumChildWindows(
@@ -90,15 +210,23 @@ steps:
             IntPtr lParam
         );
 
-        [DllImport("user32.dll")]
-        public static extern bool IsWindowEnabled(IntPtr hWnd);
 
-        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        [DllImport("user32.dll")]
+        public static extern bool IsWindowEnabled(
+            IntPtr hWnd
+        );
+
+
+        [DllImport(
+            "user32.dll",
+            CharSet = CharSet.Unicode
+        )]
         public static extern int GetClassName(
             IntPtr hWnd,
             StringBuilder lpClassName,
             int nMaxCount
         );
+
 
         [DllImport("user32.dll")]
         public static extern IntPtr SendMessage(
@@ -108,61 +236,528 @@ steps:
             IntPtr lParam
         );
 
-        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-        public static extern IntPtr SendMessage(
+
+        [DllImport(
+            "user32.dll",
+            CharSet = CharSet.Unicode,
+            EntryPoint = "SendMessage"
+        )]
+        public static extern IntPtr SendMessageText(
             IntPtr hWnd,
             uint Msg,
             IntPtr wParam,
             string lParam
         );
 
+
         [DllImport("user32.dll")]
         public static extern int GetWindowLong(
             IntPtr hWnd,
             int nIndex
         );
+
+
+        [DllImport("user32.dll")]
+        public static extern bool GetWindowRect(
+            IntPtr hWnd,
+            out RECT lpRect
+        );
+
+
+        [DllImport("user32.dll")]
+        public static extern bool SetCursorPos(
+            int X,
+            int Y
+        );
+
+
+        [DllImport("user32.dll")]
+        public static extern void mouse_event(
+            uint dwFlags,
+            uint dx,
+            uint dy,
+            uint dwData,
+            UIntPtr dwExtraInfo
+        );
+
+
+        [DllImport(
+            "user32.dll",
+            SetLastError = true
+        )]
+        static extern uint SendInput(
+            uint nInputs,
+            INPUT[] pInputs,
+            int cbSize
+        );
+
+
+        // ========================================================
+        // CLICK FISICO
+        // ========================================================
+
+        public static bool PhysicalClick(
+            IntPtr hWnd
+        )
+        {
+            if (
+                hWnd == IntPtr.Zero ||
+                !IsWindow(hWnd)
+            )
+            {
+                return false;
+            }
+
+
+            RECT rect;
+
+
+            if (
+                !GetWindowRect(
+                    hWnd,
+                    out rect
+                )
+            )
+            {
+                return false;
+            }
+
+
+            int x =
+                rect.Left +
+                (
+                    (
+                        rect.Right -
+                        rect.Left
+                    ) / 2
+                );
+
+
+            int y =
+                rect.Top +
+                (
+                    (
+                        rect.Bottom -
+                        rect.Top
+                    ) / 2
+                );
+
+
+            SetCursorPos(
+                x,
+                y
+            );
+
+
+            Thread.Sleep(150);
+
+
+            mouse_event(
+                MOUSEEVENTF_LEFTDOWN,
+                0,
+                0,
+                0,
+                UIntPtr.Zero
+            );
+
+
+            mouse_event(
+                MOUSEEVENTF_LEFTUP,
+                0,
+                0,
+                0,
+                UIntPtr.Zero
+            );
+
+
+            Thread.Sleep(250);
+
+
+            return true;
+        }
+
+
+        // ========================================================
+        // METODO PRINCIPAL
+        //
+        // WM_CHAR
+        //
+        // Este es el metodo que funciono en cwConfig.
+        // ========================================================
+
+        public static bool TypeTextByMessages(
+            IntPtr dialog,
+            IntPtr edit,
+            string value
+        )
+        {
+            if (
+                dialog == IntPtr.Zero ||
+                edit == IntPtr.Zero ||
+                !IsWindow(edit)
+            )
+            {
+                return false;
+            }
+
+
+            SetForegroundWindow(
+                dialog
+            );
+
+
+            Thread.Sleep(250);
+
+
+            PhysicalClick(
+                edit
+            );
+
+
+            Thread.Sleep(250);
+
+
+            SetFocus(
+                edit
+            );
+
+
+            Thread.Sleep(150);
+
+
+            // Seleccionar todo
+
+            SendMessage(
+                edit,
+                EM_SETSEL,
+                IntPtr.Zero,
+                new IntPtr(-1)
+            );
+
+
+            Thread.Sleep(100);
+
+
+            // Limpiar
+
+            SendMessage(
+                edit,
+                WM_CLEAR,
+                IntPtr.Zero,
+                IntPtr.Zero
+            );
+
+
+            Thread.Sleep(100);
+
+
+            // Escribir caracter por caracter
+
+            foreach (
+                char character in
+                value.ToCharArray()
+            )
+            {
+                SendMessage(
+                    edit,
+                    WM_CHAR,
+                    new IntPtr(
+                        (int)character
+                    ),
+                    IntPtr.Zero
+                );
+
+
+                Thread.Sleep(40);
+            }
+
+
+            Thread.Sleep(700);
+
+
+            return true;
+        }
+
+
+        static void SendVirtualKey(
+            ushort key,
+            bool keyUp
+        )
+        {
+            INPUT input =
+                new INPUT();
+
+
+            input.type =
+                INPUT_KEYBOARD;
+
+
+            input.U.ki.wVk =
+                key;
+
+
+            input.U.ki.wScan =
+                0;
+
+
+            input.U.ki.dwFlags =
+                keyUp
+                ? KEYEVENTF_KEYUP
+                : 0;
+
+
+            input.U.ki.time =
+                0;
+
+
+            input.U.ki.dwExtraInfo =
+                UIntPtr.Zero;
+
+
+            SendInput(
+                1,
+                new INPUT[] { input },
+                Marshal.SizeOf(
+                    typeof(INPUT)
+                )
+            );
+        }
+
+
+        static void SendUnicodeCharacter(
+            char character,
+            bool keyUp
+        )
+        {
+            INPUT input =
+                new INPUT();
+
+
+            input.type =
+                INPUT_KEYBOARD;
+
+
+            input.U.ki.wVk =
+                0;
+
+
+            input.U.ki.wScan =
+                character;
+
+
+            input.U.ki.dwFlags =
+                KEYEVENTF_UNICODE |
+                (
+                    keyUp
+                    ? KEYEVENTF_KEYUP
+                    : 0
+                );
+
+
+            input.U.ki.time =
+                0;
+
+
+            input.U.ki.dwExtraInfo =
+                UIntPtr.Zero;
+
+
+            SendInput(
+                1,
+                new INPUT[] { input },
+                Marshal.SizeOf(
+                    typeof(INPUT)
+                )
+            );
+        }
+
+
+        // ========================================================
+        // FALLBACK
+        //
+        // CLICK FISICO + SENDINPUT
+        // ========================================================
+
+        public static bool TypeTextBySendInput(
+            IntPtr dialog,
+            IntPtr edit,
+            string value
+        )
+        {
+            if (
+                dialog == IntPtr.Zero ||
+                edit == IntPtr.Zero ||
+                !IsWindow(edit)
+            )
+            {
+                return false;
+            }
+
+
+            SetForegroundWindow(
+                dialog
+            );
+
+
+            Thread.Sleep(250);
+
+
+            PhysicalClick(
+                edit
+            );
+
+
+            Thread.Sleep(300);
+
+
+            SetFocus(
+                edit
+            );
+
+
+            Thread.Sleep(150);
+
+
+            // CTRL + A
+
+            SendVirtualKey(
+                VK_CONTROL,
+                false
+            );
+
+
+            SendVirtualKey(
+                VK_A,
+                false
+            );
+
+
+            SendVirtualKey(
+                VK_A,
+                true
+            );
+
+
+            SendVirtualKey(
+                VK_CONTROL,
+                true
+            );
+
+
+            Thread.Sleep(100);
+
+
+            // BACKSPACE
+
+            SendVirtualKey(
+                VK_BACK,
+                false
+            );
+
+
+            SendVirtualKey(
+                VK_BACK,
+                true
+            );
+
+
+            Thread.Sleep(100);
+
+
+            foreach (
+                char character in
+                value.ToCharArray()
+            )
+            {
+                SendUnicodeCharacter(
+                    character,
+                    false
+                );
+
+
+                SendUnicodeCharacter(
+                    character,
+                    true
+                );
+
+
+                Thread.Sleep(40);
+            }
+
+
+            Thread.Sleep(700);
+
+
+            return true;
+        }
     }
     "@
+
 
     # ============================================================
     # NORMALIZAR TEXTO
     # ============================================================
 
     function Normalize-UiText {
-        param([string]$Text)
 
-        if ($null -eq $Text) {
+        param(
+            [string]$Text
+        )
+
+
+        if (
+            $null -eq $Text
+        ) {
+
             return ""
         }
 
-        $formD = $Text.Normalize(
-            [System.Text.NormalizationForm]::FormD
-        )
 
-        $builder = New-Object System.Text.StringBuilder
+        $formD =
+            $Text.Normalize(
+                [System.Text.NormalizationForm]::FormD
+            )
 
-        foreach ($char in $formD.ToCharArray()) {
+
+        $builder =
+            New-Object System.Text.StringBuilder
+
+
+        foreach (
+            $char in
+            $formD.ToCharArray()
+        ) {
+
             $category =
-                [System.Globalization.CharUnicodeInfo]::GetUnicodeCategory($char)
+                [System.Globalization.CharUnicodeInfo]::GetUnicodeCategory(
+                    $char
+                )
+
 
             if (
                 $category -ne
                 [System.Globalization.UnicodeCategory]::NonSpacingMark
             ) {
-                [void]$builder.Append($char)
+
+                [void]$builder.Append(
+                    $char
+                )
             }
         }
+
 
         return $builder.ToString().Normalize(
             [System.Text.NormalizationForm]::FormC
         ).Trim().ToLowerInvariant()
     }
 
+
     # ============================================================
-    # BUSCAR VENTANA GLOBALMENTE POR TÍTULO
+    # BUSCAR VENTANA GLOBALMENTE POR TITULO
     # ============================================================
 
     function Get-WindowByTitle {
+
         param(
             [Parameter(Mandatory = $true)]
             [string]$Title,
@@ -170,67 +765,108 @@ steps:
             [long]$ExcludeHandle = 0
         )
 
-        $resultado = New-Object System.Collections.Generic.List[object]
-        $tituloBuscado = Normalize-UiText $Title
 
-        $callback = [Win32+EnumWindowsProc]{
-            param(
-                [IntPtr]$hWnd,
-                [IntPtr]$lParam
-            )
+        $resultado =
+            New-Object System.Collections.Generic.List[object]
 
-            if ([Win32]::IsWindowVisible($hWnd)) {
-                $length = [Win32]::GetWindowTextLength($hWnd)
 
-                if ($length -gt 0) {
-                    $sb = New-Object System.Text.StringBuilder ($length + 1)
+        $tituloBuscado =
+            Normalize-UiText $Title
 
-                    [void][Win32]::GetWindowText(
-                        $hWnd,
-                        $sb,
-                        $sb.Capacity
+
+        $callback =
+            [Win32+EnumWindowsProc]{
+
+                param(
+                    [IntPtr]$hWnd,
+                    [IntPtr]$lParam
+                )
+
+
+                if (
+                    [Win32]::IsWindowVisible(
+                        $hWnd
                     )
+                ) {
 
-                    $titulo = $sb.ToString()
+                    $length =
+                        [Win32]::GetWindowTextLength(
+                            $hWnd
+                        )
+
 
                     if (
-                        (Normalize-UiText $titulo) -eq $tituloBuscado -and
-                        $hWnd.ToInt64() -ne $ExcludeHandle
+                        $length -gt 0
                     ) {
-                        [uint32]$windowPid = 0
 
-                        [void][Win32]::GetWindowThreadProcessId(
+                        $sb =
+                            New-Object System.Text.StringBuilder (
+                                $length + 1
+                            )
+
+
+                        [void][Win32]::GetWindowText(
                             $hWnd,
-                            [ref]$windowPid
+                            $sb,
+                            $sb.Capacity
                         )
 
-                        $resultado.Add(
-                            [PSCustomObject]@{
-                                Handle    = $hWnd
-                                ProcessId = [int]$windowPid
-                                Title     = $titulo
-                            }
-                        )
+
+                        $titulo =
+                            $sb.ToString()
+
+
+                        if (
+                            (Normalize-UiText $titulo) -eq
+                            $tituloBuscado -and
+
+                            $hWnd.ToInt64() -ne
+                            $ExcludeHandle
+                        ) {
+
+                            [uint32]$windowPid =
+                                0
+
+
+                            [void][Win32]::GetWindowThreadProcessId(
+                                $hWnd,
+                                [ref]$windowPid
+                            )
+
+
+                            $resultado.Add(
+                                [PSCustomObject]@{
+                                    Handle    = $hWnd
+                                    ProcessId = [int]$windowPid
+                                    Title     = $titulo
+                                }
+                            )
+                        }
                     }
                 }
+
+
+                return $true
             }
 
-            return $true
-        }
 
         [void][Win32]::EnumWindows(
             $callback,
             [IntPtr]::Zero
         )
 
-        return $resultado | Select-Object -First 1
+
+        return $resultado |
+            Select-Object -First 1
     }
+
 
     # ============================================================
     # ESPERAR VENTANA GLOBAL
     # ============================================================
 
     function Wait-WindowGlobal {
+
         param(
             [Parameter(Mandatory = $true)]
             [string]$Title,
@@ -240,75 +876,117 @@ steps:
             [long]$ExcludeHandle = 0
         )
 
+
         Write-Host ""
         Write-Host "Esperando ventana: '$Title'"
 
-        $limite = (Get-Date).AddSeconds($TimeoutSeconds)
 
-        while ((Get-Date) -lt $limite) {
-            $ventana = Get-WindowByTitle `
-                -Title $Title `
-                -ExcludeHandle $ExcludeHandle
+        $limite =
+            (Get-Date).AddSeconds(
+                $TimeoutSeconds
+            )
 
-            if ($ventana) {
+
+        while (
+            (Get-Date) -lt
+            $limite
+        ) {
+
+            $ventana =
+                Get-WindowByTitle `
+                    -Title $Title `
+                    -ExcludeHandle $ExcludeHandle
+
+
+            if (
+                $ventana
+            ) {
+
                 Write-Host ""
                 Write-Host "VENTANA DETECTADA"
-                Write-Host "Título: $($ventana.Title)"
+                Write-Host "Titulo: $($ventana.Title)"
                 Write-Host "PID: $($ventana.ProcessId)"
                 Write-Host "Handle: $($ventana.Handle)"
+
 
                 return $ventana
             }
 
+
             Write-Host "$(Get-Date -Format 'HH:mm:ss') - Esperando '$Title'..."
+
+
             Start-Sleep -Seconds 2
         }
 
-        throw "No apareció la ventana '$Title'."
+
+        throw "No aparecio la ventana '$Title'."
     }
+
 
     # ============================================================
     # ACTIVAR VENTANA
     # ============================================================
 
     function Activate-Window {
+
         param(
             [Parameter(Mandatory = $true)]
             $Window
         )
+
 
         [void][Win32]::ShowWindowAsync(
             $Window.Handle,
             9
         )
 
+
         Start-Sleep -Milliseconds 500
 
-        $activada = [Win32]::SetForegroundWindow(
-            $Window.Handle
-        )
 
-        if (-not $activada) {
+        $activada =
+            [Win32]::SetForegroundWindow(
+                $Window.Handle
+            )
+
+
+        if (
+            -not $activada
+        ) {
+
             try {
-                $wshell = New-Object -ComObject WScript.Shell
-                $activada = $wshell.AppActivate(
-                    [int]$Window.ProcessId
-                )
+
+                $wshell =
+                    New-Object -ComObject WScript.Shell
+
+
+                $activada =
+                    $wshell.AppActivate(
+                        [int]$Window.ProcessId
+                    )
             }
             catch {
-                $activada = $false
+
+                $activada =
+                    $false
             }
         }
 
-        Write-Host "Resultado activación: $activada"
+
+        Write-Host "Resultado activacion: $activada"
+
+
         Start-Sleep -Milliseconds 700
     }
 
+
     # ============================================================
-    # SENDKEYS CON DIAGNÓSTICO
+    # SENDKEYS
     # ============================================================
 
     function Send-KeySafe {
+
         param(
             [Parameter(Mandatory = $true)]
             [string]$Keys,
@@ -316,27 +994,29 @@ steps:
             [string]$Description = $Keys
         )
 
+
         try {
+
             Write-Host "Enviando: $Description"
+
 
             [System.Windows.Forms.SendKeys]::SendWait(
                 $Keys
             )
         }
         catch {
-            throw "No se pudo enviar '$Description'. Windows devolvió: $($_.Exception.Message)"
+
+            throw "No se pudo enviar '$Description'. Windows devolvio: $($_.Exception.Message)"
         }
     }
 
+
     # ============================================================
-    # BUSCAR BOTÓN NATIVO/LEGACY POR TEXTO
-    #
-    # Algunos instaladores antiguos no exponen sus botones como
-    # ControlType.Button a UI Automation. En ese caso enumeramos
-    # los controles hijos Win32 y buscamos el texto del botón.
+    # BOTON NATIVO
     # ============================================================
 
     function Get-NativeButtonByName {
+
         param(
             [Parameter(Mandatory = $true)]
             $Window,
@@ -345,63 +1025,102 @@ steps:
             [string]$ButtonName
         )
 
-        $resultado = New-Object System.Collections.Generic.List[object]
-        $nombreBuscado = Normalize-UiText $ButtonName
 
-        $callback = [Win32+EnumChildWindowsProc]{
-            param(
-                [IntPtr]$hWnd,
-                [IntPtr]$lParam
-            )
+        $resultado =
+            New-Object System.Collections.Generic.List[object]
 
-            try {
-                $length = [Win32]::GetWindowTextLength($hWnd)
-                $texto = ""
 
-                if ($length -gt 0) {
-                    $sb = New-Object System.Text.StringBuilder ($length + 1)
+        $nombreBuscado =
+            Normalize-UiText $ButtonName
 
-                    [void][Win32]::GetWindowText(
-                        $hWnd,
-                        $sb,
-                        $sb.Capacity
-                    )
 
-                    $texto = $sb.ToString()
-                }
+        $callback =
+            [Win32+EnumChildWindowsProc]{
 
-                $classSb = New-Object System.Text.StringBuilder 256
-
-                [void][Win32]::GetClassName(
-                    $hWnd,
-                    $classSb,
-                    $classSb.Capacity
+                param(
+                    [IntPtr]$hWnd,
+                    [IntPtr]$lParam
                 )
 
-                $clase = $classSb.ToString()
 
-                if ($texto) {
-                    Write-Host "Control Win32 encontrado: Clase=[$clase] Texto=[$texto]"
-                }
+                try {
 
-                if (
-                    (Normalize-UiText $texto) -eq $nombreBuscado
-                ) {
-                    $resultado.Add(
-                        [PSCustomObject]@{
-                            Handle  = $hWnd
-                            Text    = $texto
-                            Class   = $clase
-                            Enabled = [Win32]::IsWindowEnabled($hWnd)
-                        }
+                    $length =
+                        [Win32]::GetWindowTextLength(
+                            $hWnd
+                        )
+
+
+                    $texto = ""
+
+
+                    if (
+                        $length -gt 0
+                    ) {
+
+                        $sb =
+                            New-Object System.Text.StringBuilder (
+                                $length + 1
+                            )
+
+
+                        [void][Win32]::GetWindowText(
+                            $hWnd,
+                            $sb,
+                            $sb.Capacity
+                        )
+
+
+                        $texto =
+                            $sb.ToString()
+                    }
+
+
+                    $classSb =
+                        New-Object System.Text.StringBuilder 256
+
+
+                    [void][Win32]::GetClassName(
+                        $hWnd,
+                        $classSb,
+                        $classSb.Capacity
                     )
+
+
+                    $clase =
+                        $classSb.ToString()
+
+
+                    if (
+                        $texto
+                    ) {
+
+                        Write-Host "Control Win32 encontrado: Clase=[$clase] Texto=[$texto]"
+                    }
+
+
+                    if (
+                        (Normalize-UiText $texto) -eq
+                        $nombreBuscado
+                    ) {
+
+                        $resultado.Add(
+                            [PSCustomObject]@{
+                                Handle  = $hWnd
+                                Text    = $texto
+                                Class   = $clase
+                                Enabled = [Win32]::IsWindowEnabled($hWnd)
+                            }
+                        )
+                    }
                 }
-            }
-            catch {
+                catch {
+                }
+
+
+                return $true
             }
 
-            return $true
-        }
 
         [void][Win32]::EnumChildWindows(
             $Window.Handle,
@@ -409,23 +1128,18 @@ steps:
             [IntPtr]::Zero
         )
 
-        return $resultado | Select-Object -First 1
+
+        return $resultado |
+            Select-Object -First 1
     }
 
 
     # ============================================================
-    # CLICK SOBRE BOTÓN POR NOMBRE
-    #
-    # IMPORTANTE:
-    # La ventana "Actualización de bases de datos" aparece primero
-    # mientras crea/actualiza modelos. Durante ese tiempo el botón
-    # Aceptar existe pero está DESHABILITADO.
-    #
-    # Esta función NO presiona ENTER ni cierra la ventana mientras
-    # el botón esté deshabilitado. Espera hasta que quede habilitado.
+    # CLICK BOTON
     # ============================================================
 
     function Click-ButtonByName {
+
         param(
             [Parameter(Mandatory = $true)]
             $Window,
@@ -438,70 +1152,111 @@ steps:
             [int]$PollSeconds = 2
         )
 
-        $limite = (Get-Date).AddSeconds($TimeoutSeconds)
-        $nombreBuscado = Normalize-UiText $ButtonName
 
-        $buttonCondition = New-Object `
-            System.Windows.Automation.PropertyCondition(
-                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-                [System.Windows.Automation.ControlType]::Button
+        $limite =
+            (Get-Date).AddSeconds(
+                $TimeoutSeconds
             )
 
-        while ((Get-Date) -lt $limite) {
 
-            $botonEncontrado = $false
+        $nombreBuscado =
+            Normalize-UiText $ButtonName
+
+
+        $buttonCondition =
+            New-Object `
+                System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                    [System.Windows.Automation.ControlType]::Button
+                )
+
+
+        while (
+            (Get-Date) -lt
+            $limite
+        ) {
+
+            $botonEncontrado =
+                $false
 
 
             # ----------------------------------------------------
-            # MÉTODO 1: UI AUTOMATION
+            # METODO 1: UI AUTOMATION
             # ----------------------------------------------------
 
             try {
+
                 $elementoVentana =
                     [System.Windows.Automation.AutomationElement]::FromHandle(
                         $Window.Handle
                     )
 
-                if ($null -ne $elementoVentana) {
 
-                    $botones = $elementoVentana.FindAll(
-                        [System.Windows.Automation.TreeScope]::Descendants,
-                        $buttonCondition
-                    )
+                if (
+                    $null -ne
+                    $elementoVentana
+                ) {
 
-                    foreach ($boton in $botones) {
+                    $botones =
+                        $elementoVentana.FindAll(
+                            [System.Windows.Automation.TreeScope]::Descendants,
+                            $buttonCondition
+                        )
+
+
+                    foreach (
+                        $boton in
+                        $botones
+                    ) {
 
                         try {
-                            $nombreBoton = $boton.Current.Name
+
+                            $nombreBoton =
+                                $boton.Current.Name
+
 
                             if (
-                                (Normalize-UiText $nombreBoton) -eq $nombreBuscado
+                                (Normalize-UiText $nombreBoton) -eq
+                                $nombreBuscado
                             ) {
-                                $botonEncontrado = $true
 
-                                if (-not $boton.Current.IsEnabled) {
+                                $botonEncontrado =
+                                    $true
 
-                                    Write-Host "$(Get-Date -Format 'HH:mm:ss') - Botón '$ButtonName' visible pero deshabilitado. El instalador continúa trabajando..."
+
+                                if (
+                                    -not
+                                    $boton.Current.IsEnabled
+                                ) {
+
+                                    Write-Host "$(Get-Date -Format 'HH:mm:ss') - Boton '$ButtonName' visible pero deshabilitado. El instalador continua trabajando..."
 
                                     break
                                 }
 
-                                Write-Host "Botón '$ButtonName' habilitado mediante UI Automation."
+
+                                Write-Host "Boton '$ButtonName' habilitado mediante UI Automation."
+
 
                                 try {
+
                                     $invokePattern =
                                         $boton.GetCurrentPattern(
                                             [System.Windows.Automation.InvokePattern]::Pattern
                                         )
 
+
                                     $invokePattern.Invoke()
 
+
                                     Write-Host "Click realizado sobre '$ButtonName' mediante UI Automation."
+
 
                                     return
                                 }
                                 catch {
-                                    Write-Warning "InvokePattern falló. Se intentará el control Win32."
+
+                                    Write-Warning "InvokePattern fallo. Se intentara el control Win32."
                                 }
                             }
                         }
@@ -511,36 +1266,45 @@ steps:
                 }
             }
             catch {
+
                 Write-Host "UI Automation no pudo inspeccionar la ventana: $($_.Exception.Message)"
             }
 
 
             # ----------------------------------------------------
-            # MÉTODO 2: CONTROL NATIVO WIN32
+            # METODO 2: WIN32
             # ----------------------------------------------------
 
-            $botonNativo = Get-NativeButtonByName `
-                -Window $Window `
-                -ButtonName $ButtonName
+            $botonNativo =
+                Get-NativeButtonByName `
+                    -Window $Window `
+                    -ButtonName $ButtonName
 
-            if ($botonNativo) {
 
-                $botonEncontrado = $true
+            if (
+                $botonNativo
+            ) {
 
-                if (-not $botonNativo.Enabled) {
+                $botonEncontrado =
+                    $true
 
-                    Write-Host "$(Get-Date -Format 'HH:mm:ss') - Botón nativo '$ButtonName' visible pero deshabilitado. Esperando..."
 
+                if (
+                    -not
+                    $botonNativo.Enabled
+                ) {
+
+                    Write-Host "$(Get-Date -Format 'HH:mm:ss') - Boton nativo '$ButtonName' visible pero deshabilitado. Esperando..."
                 }
                 else {
 
                     Write-Host ""
-                    Write-Host "BOTÓN NATIVO HABILITADO"
+                    Write-Host "BOTON NATIVO HABILITADO"
                     Write-Host "Texto : $($botonNativo.Text)"
                     Write-Host "Clase : $($botonNativo.Class)"
                     Write-Host "Handle: $($botonNativo.Handle)"
 
-                    # BM_CLICK = 0x00F5
+
                     [void][Win32]::SendMessage(
                         $botonNativo.Handle,
                         0x00F5,
@@ -548,31 +1312,41 @@ steps:
                         [IntPtr]::Zero
                     )
 
-                    Write-Host "BM_CLICK enviado al botón '$ButtonName'."
+
+                    Write-Host "BM_CLICK enviado al boton '$ButtonName'."
+
 
                     Start-Sleep -Milliseconds 750
+
 
                     return
                 }
             }
 
 
-            if (-not $botonEncontrado) {
-                Write-Host "$(Get-Date -Format 'HH:mm:ss') - La ventana está abierta pero todavía no se encontró el botón '$ButtonName'."
+            if (
+                -not
+                $botonEncontrado
+            ) {
+
+                Write-Host "$(Get-Date -Format 'HH:mm:ss') - La ventana esta abierta pero todavia no se encontro el boton '$ButtonName'."
             }
+
 
             Start-Sleep -Seconds $PollSeconds
         }
 
-        throw "El botón '$ButtonName' no quedó habilitado dentro de $TimeoutSeconds segundos."
+
+        throw "El boton '$ButtonName' no quedo habilitado dentro de $TimeoutSeconds segundos."
     }
 
 
     # ============================================================
-    # ESPERAR CIERRE DE VENTANA
+    # ESPERAR CIERRE
     # ============================================================
 
     function Wait-WindowClosed {
+
         param(
             [Parameter(Mandatory = $true)]
             $Window,
@@ -580,98 +1354,208 @@ steps:
             [int]$TimeoutSeconds = 30
         )
 
-        $handle = [long]$Window.Handle.ToInt64()
-        $limite = (Get-Date).AddSeconds($TimeoutSeconds)
 
-        while ((Get-Date) -lt $limite) {
-            if (-not [Win32]::IsWindow([IntPtr]$handle)) {
+        $handle =
+            [long]$Window.Handle.ToInt64()
+
+
+        $limite =
+            (Get-Date).AddSeconds(
+                $TimeoutSeconds
+            )
+
+
+        while (
+            (Get-Date) -lt
+            $limite
+        ) {
+
+            if (
+                -not (
+                    [Win32]::IsWindow(
+                        [IntPtr]$handle
+                    )
+                )
+            ) {
+
                 Write-Host "Ventana cerrada correctamente."
+
                 return
             }
+
 
             Start-Sleep -Milliseconds 500
         }
 
-        Write-Warning "La ventana no confirmó su cierre dentro del tiempo esperado."
+
+        Write-Warning "La ventana no confirmo su cierre dentro del tiempo esperado."
     }
 
+
     # ============================================================
-    # OBTENER TEXTBOX NATIVOS DE UNA VENTANA
+    # OBTENER TEXTBOX NATIVOS
     #
-    # El instalador utiliza controles VB6/ThunderRT6.
-    # Estos controles pueden no aparecer correctamente en UI Automation.
+    # AHORA TAMBIEN OBTIENE LA POSICION EN PANTALLA.
     # ============================================================
 
     function Get-NativeTextBoxes {
+
         param(
             [Parameter(Mandatory = $true)]
             $Window
         )
 
-        $resultado = New-Object System.Collections.Generic.List[object]
 
-        $callback = [Win32+EnumChildWindowsProc]{
-            param(
-                [IntPtr]$hWnd,
-                [IntPtr]$lParam
-            )
+        $resultado =
+            New-Object System.Collections.Generic.List[object]
 
-            try {
-                $classSb = New-Object System.Text.StringBuilder 256
 
-                [void][Win32]::GetClassName(
-                    $hWnd,
-                    $classSb,
-                    $classSb.Capacity
+        $callback =
+            [Win32+EnumChildWindowsProc]{
+
+                param(
+                    [IntPtr]$hWnd,
+                    [IntPtr]$lParam
                 )
 
-                $clase = $classSb.ToString()
 
-                if (
-                    $clase -match "(?i)textbox|edit"
-                ) {
-                    $length = [Win32]::GetWindowTextLength($hWnd)
-                    $texto = ""
+                try {
 
-                    if ($length -gt 0) {
-                        $sb = New-Object System.Text.StringBuilder ($length + 1)
+                    $classSb =
+                        New-Object System.Text.StringBuilder 256
 
-                        [void][Win32]::GetWindowText(
-                            $hWnd,
-                            $sb,
-                            $sb.Capacity
-                        )
 
-                        $texto = $sb.ToString()
-                    }
-
-                    # GWL_STYLE = -16
-                    # ES_PASSWORD = 0x20
-                    $style = [Win32]::GetWindowLong(
+                    [void][Win32]::GetClassName(
                         $hWnd,
-                        -16
+                        $classSb,
+                        $classSb.Capacity
                     )
 
-                    $esPassword = (($style -band 0x20) -ne 0)
 
-                    Write-Host "TextBox nativo: Clase=[$clase] Texto=[$texto] PasswordStyle=[$esPassword] Handle=[$hWnd]"
+                    $clase =
+                        $classSb.ToString()
 
-                    $resultado.Add(
-                        [PSCustomObject]@{
-                            Handle     = $hWnd
-                            Class      = $clase
-                            Text       = $texto
-                            IsPassword = $esPassword
-                            Enabled    = [Win32]::IsWindowEnabled($hWnd)
+
+                    if (
+                        $clase -match
+                        "(?i)textbox|edit"
+                    ) {
+
+                        $length =
+                            [Win32]::GetWindowTextLength(
+                                $hWnd
+                            )
+
+
+                        $texto = ""
+
+
+                        if (
+                            $length -gt 0
+                        ) {
+
+                            $sb =
+                                New-Object System.Text.StringBuilder (
+                                    $length + 1
+                                )
+
+
+                            [void][Win32]::GetWindowText(
+                                $hWnd,
+                                $sb,
+                                $sb.Capacity
+                            )
+
+
+                            $texto =
+                                $sb.ToString()
                         }
-                    )
+
+
+                        $style =
+                            [Win32]::GetWindowLong(
+                                $hWnd,
+                                -16
+                            )
+
+
+                        $esPassword =
+                            (
+                                (
+                                    $style -band
+                                    0x20
+                                ) -ne 0
+                            )
+
+
+                        $rect =
+                            New-Object Win32+RECT
+
+
+                        $rectOk =
+                            [Win32]::GetWindowRect(
+                                $hWnd,
+                                [ref]$rect
+                            )
+
+
+                        $top =
+                            0
+
+
+                        $left =
+                            0
+
+
+                        if (
+                            $rectOk
+                        ) {
+
+                            $top =
+                                $rect.Top
+
+
+                            $left =
+                                $rect.Left
+                        }
+
+
+                        # IMPORTANTE:
+                        # No mostramos el contenido del control si
+                        # tiene estilo password.
+
+                        $textoLog =
+                            if ($esPassword) {
+                                "<PASSWORD>"
+                            }
+                            else {
+                                $texto
+                            }
+
+
+                        Write-Host "TextBox nativo: Clase=[$clase] Texto=[$textoLog] PasswordStyle=[$esPassword] Top=[$top] Handle=[$hWnd]"
+
+
+                        $resultado.Add(
+                            [PSCustomObject]@{
+                                Handle     = $hWnd
+                                Class      = $clase
+                                Text       = $texto
+                                IsPassword = $esPassword
+                                Enabled    = [Win32]::IsWindowEnabled($hWnd)
+                                Top        = $top
+                                Left       = $left
+                            }
+                        )
+                    }
                 }
-            }
-            catch {
+                catch {
+                }
+
+
+                return $true
             }
 
-            return $true
-        }
 
         [void][Win32]::EnumChildWindows(
             $Window.Handle,
@@ -679,28 +1563,103 @@ steps:
             [IntPtr]::Zero
         )
 
+
         return $resultado
     }
 
 
     # ============================================================
-    # COMPLETAR "Ingrese la contraseña" - THUNDERRT6 V5
+    # OBTENER ESPECIFICAMENTE EL CAMPO PASSWORD
     #
-    # Diagnóstico confirmado:
-    # - La ventana sí existe como ThunderRT6FormDC.
-    # - El selector visual muestra edit[Class="ThunderRT6TextBox"].
-    # - Pero EnumChildWindows/UIA puede quedar bloqueado mientras
-    #   el diálogo modal está abierto y recién responde al cancelar.
+    # MISMA LOGICA VALIDADA EN CWCONFIG:
     #
-    # Por eso esta versión NO enumera el TextBox.
-    #
-    # En la ventana observada el foco inicial queda en el campo
-    # Contraseña. Se activa la ventana y se pega la clave usando
-    # el portapapeles. Luego se espera que "Aceptar" se habilite
-    # y se hace click sobre el botón nativo.
+    # 1) ES_PASSWORD
+    # 2) Si VB6 no lo expone, el ThunderRT6TextBox mas abajo
+    # ============================================================
+
+    function Get-NativePasswordTextBox {
+
+        param(
+            [Parameter(Mandatory = $true)]
+            $Window
+        )
+
+
+        $textBoxes =
+            @(
+                Get-NativeTextBoxes `
+                    -Window $Window
+            )
+
+
+        if (
+            $textBoxes.Count -eq 0
+        ) {
+
+            return $null
+        }
+
+
+        Write-Host ""
+        Write-Host "TextBox detectados: $($textBoxes.Count)"
+
+
+        # --------------------------------------------------------
+        # METODO 1 - ESTILO PASSWORD
+        # --------------------------------------------------------
+
+        $passwordBox =
+            $textBoxes |
+            Where-Object {
+                $_.IsPassword
+            } |
+            Select-Object -First 1
+
+
+        if (
+            $passwordBox
+        ) {
+
+            Write-Host "[OK] Campo contraseña identificado mediante ES_PASSWORD."
+
+            return $passwordBox
+        }
+
+
+        # --------------------------------------------------------
+        # METODO 2 - POSICION
+        #
+        # En este dialogo:
+        #
+        # Usuario
+        # [........]
+        #
+        # Contraseña
+        # [........]
+        #
+        # El password es el campo ubicado mas abajo.
+        # --------------------------------------------------------
+
+        Write-Host "[WARN] VB6 no informo ES_PASSWORD."
+        Write-Host "[INFO] Se utilizara el ThunderRT6TextBox ubicado mas abajo."
+
+
+        $passwordBox =
+            $textBoxes |
+            Sort-Object Top -Descending |
+            Select-Object -First 1
+
+
+        return $passwordBox
+    }
+
+
+    # ============================================================
+    # COMPLETAR PASSWORD - MISMA CORRECCION DE CWCONFIG
     # ============================================================
 
     function Complete-PasswordDialogThunderRT6 {
+
         param(
             [Parameter(Mandatory = $true)]
             [string]$Password,
@@ -708,25 +1667,33 @@ steps:
             [int]$TimeoutSeconds = 120
         )
 
+
         # --------------------------------------------------------
-        # ESPERAR LA VENTANA DE CONTRASEÑA
+        # ESPERAR VENTANA
         # --------------------------------------------------------
-        Write-Host "VENTANA DE CONTRASEÑA DETECTADA mmmm"
-        $ventanaPassword = Wait-WindowGlobal `
-            -Title "Ingrese la contraseña" `
-            -TimeoutSeconds $TimeoutSeconds
+
+        $ventanaPassword =
+            Wait-WindowGlobal `
+                -Title "Ingrese la contraseña" `
+                -TimeoutSeconds $TimeoutSeconds
+
 
         Write-Host ""
+        Write-Host "=============================================="
         Write-Host "VENTANA DE CONTRASEÑA DETECTADA"
-        Write-Host "Título : $($ventanaPassword.Title)"
+        Write-Host "=============================================="
+        Write-Host "Titulo : $($ventanaPassword.Title)"
         Write-Host "PID    : $($ventanaPassword.ProcessId)"
         Write-Host "Handle : $($ventanaPassword.Handle)"
 
+
         # --------------------------------------------------------
-        # VALIDAR CLASE DE LA VENTANA
+        # CLASE DE VENTANA
         # --------------------------------------------------------
 
-        $classSb = New-Object System.Text.StringBuilder 256
+        $classSb =
+            New-Object System.Text.StringBuilder 256
+
 
         [void][Win32]::GetClassName(
             $ventanaPassword.Handle,
@@ -734,54 +1701,150 @@ steps:
             $classSb.Capacity
         )
 
-        $claseVentana = $classSb.ToString()
+
+        $claseVentana =
+            $classSb.ToString()
+
 
         Write-Host "Clase ventana detectada: [$claseVentana]"
 
-        if ($claseVentana -ne "ThunderRT6FormDC") {
+
+        if (
+            $claseVentana -ne
+            "ThunderRT6FormDC"
+        ) {
+
             Write-Warning "Se esperaba la clase ThunderRT6FormDC."
         }
 
+
         # --------------------------------------------------------
-        # ACTIVAR LA VENTANA
+        # ACTIVAR VENTANA
         # --------------------------------------------------------
 
         Activate-Window `
             -Window $ventanaPassword
 
-        Start-Sleep -Seconds 1
+
+        Start-Sleep -Milliseconds 700
+
 
         # --------------------------------------------------------
-        # PEGAR CONTRASEÑA EN EL CONTROL QUE YA TIENE EL FOCO
+        # IDENTIFICAR CAMPO PASSWORD
+        # --------------------------------------------------------
+
+        Write-Host ""
+        Write-Host "Buscando ThunderRT6TextBox de contraseña..."
+
+
+        $passwordBox =
+            Get-NativePasswordTextBox `
+                -Window $ventanaPassword
+
+
+        if (
+            -not $passwordBox
+        ) {
+
+            throw "No se encontro el ThunderRT6TextBox correspondiente a la contraseña."
+        }
+
+
+        Write-Host ""
+        Write-Host "[OK] TextBox de contraseña identificado."
+        Write-Host "[INFO] Clase : $($passwordBox.Class)"
+        Write-Host "[INFO] Handle: $($passwordBox.Handle)"
+        Write-Host "[INFO] Top   : $($passwordBox.Top)"
+        Write-Host "[INFO] La contraseña NO se mostrara en el log."
+
+
+        # --------------------------------------------------------
+        # INTENTO 1
         #
-        # La pantalla observada deja el cursor dentro del campo
-        # Contraseña. Usamos portapapeles porque la contraseña
-        # contiene caracteres especiales.
+        # WM_CHAR
+        #
+        # ESTE ES EL METODO QUE FUNCIONO EN CWCONFIG.
         # --------------------------------------------------------
 
-        Write-Host "Ingresando contraseña en el campo actualmente enfocado..."
+        Write-Host ""
+        Write-Host "[INFO] Intento 1: escribiendo contraseña mediante WM_CHAR..."
 
-        Set-Clipboard `
-            -Value $Password
 
-        try {
+        $resultado =
+            [Win32]::TypeTextByMessages(
+                $ventanaPassword.Handle,
+                $passwordBox.Handle,
+                $Password
+            )
 
-            Send-KeySafe `
-                -Keys "^v" `
-                -Description "pegar contraseña en ThunderRT6TextBox"
 
+        if (
+            -not $resultado
+        ) {
+
+            Write-Warning "No fue posible escribir mediante WM_CHAR."
         }
-        finally {
 
-            Start-Sleep -Milliseconds 750
-            Set-Clipboard -Value ""
+
+        Start-Sleep -Milliseconds 1000
+
+
+        # --------------------------------------------------------
+        # VERIFICAR ACEPTAR
+        # --------------------------------------------------------
+
+        $aceptar =
+            Get-NativeButtonByName `
+                -Window $ventanaPassword `
+                -ButtonName "Aceptar"
+
+
+        if (
+            $aceptar -and
+            $aceptar.Enabled
+        ) {
+
+            Write-Host ""
+            Write-Host "[OK] Aceptar se habilito mediante WM_CHAR."
+        }
+        else {
+
+            # ----------------------------------------------------
+            # FALLBACK SENDINPUT
+            # ----------------------------------------------------
+
+            Write-Host ""
+            Write-Host "[WARN] Aceptar continua deshabilitado."
+            Write-Host "[INFO] Intento 2: click fisico + SendInput..."
+
+
+            $resultadoFallback =
+                [Win32]::TypeTextBySendInput(
+                    $ventanaPassword.Handle,
+                    $passwordBox.Handle,
+                    $Password
+                )
+
+
+            if (
+                -not $resultadoFallback
+            ) {
+
+                throw "No fue posible escribir la contraseña mediante WM_CHAR ni SendInput."
+            }
+
+
+            Start-Sleep -Milliseconds 1000
         }
 
+
         # --------------------------------------------------------
-        # ESPERAR QUE ACEPTAR SE HABILITE
+        # ACEPTAR
         # --------------------------------------------------------
 
-        Write-Host "Esperando que el botón Aceptar quede habilitado..."
+        Write-Host ""
+        Write-Host "Esperando que el boton Aceptar quede habilitado..."
+
 
         Click-ButtonByName `
             -Window $ventanaPassword `
@@ -789,7 +1852,10 @@ steps:
             -TimeoutSeconds 60 `
             -PollSeconds 1
 
-        Write-Host "Contraseña confirmada correctamente."
+
+        Write-Host ""
+        Write-Host "[OK] Contraseña confirmada correctamente."
+
 
         Wait-WindowClosed `
             -Window $ventanaPassword `
@@ -801,52 +1867,77 @@ steps:
     # VALIDACIONES PREVIAS
     # ============================================================
 
-    if ([string]::IsNullOrWhiteSpace($env:SETUP_PASSWORD)) {
+    if (
+        [string]::IsNullOrWhiteSpace(
+            $env:SETUP_PASSWORD
+        )
+    ) {
+
         throw "No se encuentra definida la variable SetupPassword."
     }
 
-    if (-not (Test-Path "C:\Release")) {
+
+    if (
+        -not (
+            Test-Path "C:\Release"
+        )
+    ) {
+
         throw "La carpeta C:\Release no existe en el equipo $env:COMPUTERNAME."
     }
+
 
     # ============================================================
     # BUSCAR SETUP
     # ============================================================
 
-    $archivoExe = Get-ChildItem `
-        -Path "C:\Release" `
-        -Filter "*.exe" `
-        -File |
+    $archivoExe =
+        Get-ChildItem `
+            -Path "C:\Release" `
+            -Filter "*.exe" `
+            -File |
         Select-Object -First 1
 
-    if (-not $archivoExe) {
-        throw "No se encontró ningún archivo .exe en C:\Release."
+
+    if (
+        -not $archivoExe
+    ) {
+
+        throw "No se encontro ningun archivo .exe en C:\Release."
     }
+
 
     Write-Host ""
     Write-Host "Instalador encontrado: $($archivoExe.FullName)"
+
 
     # ============================================================
     # EJECUTAR SETUP
     # ============================================================
 
-    $instalador = Start-Process `
-        -FilePath $archivoExe.FullName `
-        -PassThru
+    $instalador =
+        Start-Process `
+            -FilePath $archivoExe.FullName `
+            -PassThru
+
 
     Write-Host "Instalador iniciado: $($archivoExe.FullName)"
     Write-Host "PID inicial: $($instalador.Id)"
+
 
     # ============================================================
     # VENTANA INICIAL
     # ============================================================
 
-    $ventanaInicial = Wait-WindowGlobal `
-        -Title "Instalación de Softland" `
-        -TimeoutSeconds 120
+    $ventanaInicial =
+        Wait-WindowGlobal `
+            -Title "Instalación de Softland" `
+            -TimeoutSeconds 120
+
 
     Activate-Window `
         -Window $ventanaInicial
+
 
     # ============================================================
     # PASOS INICIALES
@@ -854,80 +1945,105 @@ steps:
 
     Write-Host "Avanzando pantalla inicial..."
 
+
     Send-KeySafe `
         -Keys "{ENTER}" `
         -Description "ENTER inicial"
 
+
     Start-Sleep -Seconds 5
 
-    Write-Host "Seleccionando primera opción..."
+
+    Write-Host "Seleccionando primera opcion..."
+
 
     Activate-Window `
         -Window $ventanaInicial
+
 
     Send-KeySafe `
         -Keys "{TAB}" `
         -Description "TAB primer checkbox"
 
+
     Send-KeySafe `
         -Keys " " `
         -Description "ESPACIO primer checkbox"
 
+
     Start-Sleep -Seconds 1
+
 
     Send-KeySafe `
         -Keys "{ENTER}" `
         -Description "ENTER confirmar primer checkbox"
 
+
     Start-Sleep -Seconds 5
 
-    Write-Host "Seleccionando segunda opción..."
+
+    Write-Host "Seleccionando segunda opcion..."
+
 
     Activate-Window `
         -Window $ventanaInicial
+
 
     Send-KeySafe `
         -Keys "{TAB}" `
         -Description "TAB segundo checkbox"
 
+
     Send-KeySafe `
         -Keys " " `
         -Description "ESPACIO segundo checkbox"
 
+
     Start-Sleep -Seconds 1
+
 
     Send-KeySafe `
         -Keys "{ENTER}" `
         -Description "ENTER confirmar segundo checkbox"
 
+
     Start-Sleep -Seconds 1
 
-    Write-Host "Iniciando instalación..."
+
+    Write-Host "Iniciando instalacion..."
+
 
     Activate-Window `
         -Window $ventanaInicial
 
+
     Send-KeySafe `
         -Keys "{ENTER}" `
-        -Description "ENTER iniciar instalación"
+        -Description "ENTER iniciar instalacion"
+
 
     Write-Host ""
-    Write-Host "Instalación trabajando..."
+    Write-Host "Instalacion trabajando..."
+
 
     Start-Sleep -Seconds 20
 
+
     # ============================================================
-    # ACTUALIZACIÓN DE BASES
+    # ACTUALIZACION DE BASES
     # ============================================================
 
-    $ventanaBD = Wait-WindowGlobal `
-        -Title "Actualización de bases de datos" `
-        -TimeoutSeconds 2700
+    $ventanaBD =
+        Wait-WindowGlobal `
+            -Title "Actualización de bases de datos" `
+            -TimeoutSeconds 2700
+
 
     Write-Host ""
-    Write-Host "La ventana de actualización ya está visible."
-    Write-Host "Ahora se esperará hasta que termine la creación/actualización de modelos"
-    Write-Host "y el botón 'Aceptar' quede habilitado."
+    Write-Host "La ventana de actualizacion ya esta visible."
+    Write-Host "Ahora se esperara hasta que termine la creacion/actualizacion de modelos"
+    Write-Host "y el boton 'Aceptar' quede habilitado."
+
 
     Click-ButtonByName `
         -Window $ventanaBD `
@@ -935,13 +2051,20 @@ steps:
         -TimeoutSeconds 2700 `
         -PollSeconds 3
 
-    Write-Host "Botón Aceptar de actualización de bases habilitado y presionado."
+
+    Write-Host "Boton Aceptar de actualizacion de bases habilitado y presionado."
+
 
     # ============================================================
     # CONTRASEÑA
     #
-    # El diálogo es VB6/ThunderRT6, por lo que se trabaja
-    # directamente con controles Win32 nativos.
+    # AHORA USA LA MISMA TECNICA VALIDADA EN CWCONFIG:
+    #
+    # ThunderRT6TextBox
+    # -> campo password correcto
+    # -> click fisico
+    # -> WM_CHAR
+    # -> SendInput fallback
     # ============================================================
 
     Complete-PasswordDialogThunderRT6 `
@@ -950,44 +2073,55 @@ steps:
 
 
     # ============================================================
-    # PRIMERA CONFIRMACIÓN
+    # PRIMERA CONFIRMACION
     # ============================================================
 
-    $confirmacion1 = Wait-WindowGlobal `
-        -Title "Configuración del Sistema de Gestión" `
-        -TimeoutSeconds 120
+    $confirmacion1 =
+        Wait-WindowGlobal `
+            -Title "Configuración del Sistema de Gestión" `
+            -TimeoutSeconds 120
+
 
     $handlePrimera =
         $confirmacion1.Handle.ToInt64()
+
 
     Click-ButtonByName `
         -Window $confirmacion1 `
         -ButtonName "Sí" `
         -TimeoutSeconds 30
 
-    Write-Host "Primera confirmación aceptada."
+
+    Write-Host "Primera confirmacion aceptada."
+
 
     Wait-WindowClosed `
         -Window $confirmacion1 `
         -TimeoutSeconds 30
 
+
     Start-Sleep -Seconds 1
 
+
     # ============================================================
-    # SEGUNDA CONFIRMACIÓN
+    # SEGUNDA CONFIRMACION
     # ============================================================
 
-    $confirmacion2 = Wait-WindowGlobal `
-        -Title "Configuración del Sistema de Gestión" `
-        -TimeoutSeconds 120 `
-        -ExcludeHandle $handlePrimera
+    $confirmacion2 =
+        Wait-WindowGlobal `
+            -Title "Configuración del Sistema de Gestión" `
+            -TimeoutSeconds 120 `
+            -ExcludeHandle $handlePrimera
+
 
     Click-ButtonByName `
         -Window $confirmacion2 `
         -ButtonName "Sí" `
         -TimeoutSeconds 30
 
-    Write-Host "Segunda confirmación aceptada."
+
+    Write-Host "Segunda confirmacion aceptada."
+
 
     # ============================================================
     # FINAL
@@ -995,8 +2129,9 @@ steps:
 
     Write-Host ""
     Write-Host "=============================================="
-    Write-Host "AUTOMATIZACIÓN COMPLETADA"
+    Write-Host "AUTOMATIZACION COMPLETADA"
     Write-Host "=============================================="
+
 
   env:
     SETUP_PASSWORD: $(SetupPassword)
