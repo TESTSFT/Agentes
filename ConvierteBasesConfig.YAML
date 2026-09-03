@@ -23,14 +23,12 @@ jobs:
 
   - task: PowerShell@2
     displayName: "Abrir Config y seleccionar empresas"
-
     env:
       DEBUG_PAUSE_MINUTES: ${{ parameters.debugPauseMinutes }}
 
     inputs:
       targetType: inline
       pwsh: false
-
       script: |
 
         $ErrorActionPreference = "Stop"
@@ -92,7 +90,7 @@ jobs:
                 UIntPtr dwExtraInfo
             );
         }
-"@
+        "@
 
 
         # ============================================================
@@ -225,7 +223,9 @@ jobs:
                 );
 
                 if (process == IntPtr.Zero)
+                {
                     return false;
+                }
 
                 byte[] lvItem = new byte[20];
 
@@ -296,7 +296,7 @@ jobs:
                 return ok;
             }
         }
-"@
+        "@
 
 
         # ============================================================
@@ -314,38 +314,35 @@ jobs:
             }
 
             $Text =
-                $Text.Replace(
-                    "&",
-                    ""
-                ).Trim().ToLowerInvariant()
+                $Text.Replace("&","").Trim().ToLowerInvariant()
 
-            $normalized =
+            $Normalized =
                 $Text.Normalize(
                     [Text.NormalizationForm]::FormD
                 )
 
-            $builder =
+            $Builder =
                 New-Object Text.StringBuilder
 
-            foreach ($char in $normalized.ToCharArray()) {
+            foreach ($Char in $Normalized.ToCharArray()) {
 
-                $category =
+                $Category =
                     [Globalization.CharUnicodeInfo]::GetUnicodeCategory(
-                        $char
+                        $Char
                     )
 
                 if (
-                    $category -ne
+                    $Category -ne
                     [Globalization.UnicodeCategory]::NonSpacingMark
                 ) {
 
-                    [void]$builder.Append(
-                        $char
+                    [void]$Builder.Append(
+                        $Char
                     )
                 }
             }
 
-            return $builder.ToString()
+            return $Builder.ToString()
         }
 
 
@@ -369,7 +366,7 @@ jobs:
                 [string]$ClassName
             )
 
-            $condition =
+            $Condition =
                 New-Object System.Windows.Automation.PropertyCondition(
                     [System.Windows.Automation.AutomationElement]::ClassNameProperty,
                     $ClassName
@@ -377,7 +374,7 @@ jobs:
 
             return $Root.FindFirst(
                 [System.Windows.Automation.TreeScope]::Descendants,
-                $condition
+                $Condition
             )
         }
 
@@ -386,33 +383,25 @@ jobs:
 
             param(
                 [System.Windows.Automation.AutomationElement]$Root,
-
                 [string]$AutomationId,
-
                 [string]$Name
             )
 
-            # --------------------------------------------------------
-            # 1. BUSCAR POR ID + NAME
-            # --------------------------------------------------------
+            # ========================================================
+            # 1 - ID + NOMBRE
+            # ========================================================
 
             foreach ($Element in (Get-Descendants -Root $Root)) {
 
                 try {
 
                     if (
-                        $Element.Current.ControlType -eq
-                        [System.Windows.Automation.ControlType]::MenuItem
+                        $Element.Current.AutomationId -eq $AutomationId -and
+                        (Normalize-Text $Element.Current.Name) -eq
+                        (Normalize-Text $Name)
                     ) {
 
-                        if (
-                            $Element.Current.AutomationId -eq $AutomationId -and
-                            (Normalize-Text $Element.Current.Name) -eq
-                            (Normalize-Text $Name)
-                        ) {
-
-                            return $Element
-                        }
+                        return $Element
                     }
                 }
                 catch {
@@ -420,9 +409,9 @@ jobs:
             }
 
 
-            # --------------------------------------------------------
-            # 2. FALLBACK SOLO POR AUTOMATION ID
-            # --------------------------------------------------------
+            # ========================================================
+            # 2 - SOLO AUTOMATION ID
+            # ========================================================
 
             foreach ($Element in (Get-Descendants -Root $Root)) {
 
@@ -440,9 +429,9 @@ jobs:
             }
 
 
-            # --------------------------------------------------------
-            # 3. FALLBACK POR NOMBRE
-            # --------------------------------------------------------
+            # ========================================================
+            # 3 - SOLO NOMBRE
+            # ========================================================
 
             foreach ($Element in (Get-Descendants -Root $Root)) {
 
@@ -460,7 +449,6 @@ jobs:
                 }
             }
 
-
             return $null
         }
 
@@ -473,7 +461,7 @@ jobs:
 
             Write-Host ""
             Write-Host "----------------------------------------------------------"
-            Write-Host " MENU ITEMS DETECTADOS POR EL AGENTE"
+            Write-Host " CONTROLES DE MENU DETECTADOS"
             Write-Host "----------------------------------------------------------"
 
             $Count = 0
@@ -482,20 +470,40 @@ jobs:
 
                 try {
 
+                    $Name =
+                        $Element.Current.Name
+
+                    $AutomationId =
+                        $Element.Current.AutomationId
+
+                    $ClassName =
+                        $Element.Current.ClassName
+
+                    $Type =
+                        $Element.Current.ControlType.ProgrammaticName
+
+
                     if (
-                        $Element.Current.ControlType -eq
-                        [System.Windows.Automation.ControlType]::MenuItem
+                        -not [string]::IsNullOrWhiteSpace($Name) -or
+                        -not [string]::IsNullOrWhiteSpace($AutomationId)
                     ) {
 
-                        $Count++
+                        if (
+                            $Type -like "*Menu*" -or
+                            $AutomationId -like "Item*"
+                        ) {
 
-                        Write-Host (
-                            "MenuItem #{0} | Name=[{1}] | AutomationId=[{2}] | Class=[{3}]" -f
-                            $Count,
-                            $Element.Current.Name,
-                            $Element.Current.AutomationId,
-                            $Element.Current.ClassName
-                        )
+                            $Count++
+
+                            Write-Host (
+                                "Elemento #{0} | Name=[{1}] | AutomationId=[{2}] | Type=[{3}] | Class=[{4}]" -f
+                                $Count,
+                                $Name,
+                                $AutomationId,
+                                $Type,
+                                $ClassName
+                            )
+                        }
                     }
                 }
                 catch {
@@ -503,7 +511,7 @@ jobs:
             }
 
             Write-Host "----------------------------------------------------------"
-            Write-Host "[INFO] Total MenuItem detectados: $Count"
+            Write-Host "[INFO] Total controles encontrados: $Count"
             Write-Host ""
         }
 
@@ -515,13 +523,14 @@ jobs:
             )
 
             if ($null -eq $Element) {
+
                 throw "Se intento hacer clic sobre un elemento inexistente."
             }
 
 
-            # --------------------------------------------------------
+            # ========================================================
             # INVOKE
-            # --------------------------------------------------------
+            # ========================================================
 
             try {
 
@@ -538,9 +547,9 @@ jobs:
             }
 
 
-            # --------------------------------------------------------
-            # EXPAND COLLAPSE
-            # --------------------------------------------------------
+            # ========================================================
+            # EXPAND
+            # ========================================================
 
             try {
 
@@ -557,9 +566,9 @@ jobs:
             }
 
 
-            # --------------------------------------------------------
+            # ========================================================
             # LEGACY
-            # --------------------------------------------------------
+            # ========================================================
 
             try {
 
@@ -576,9 +585,9 @@ jobs:
             }
 
 
-            # --------------------------------------------------------
+            # ========================================================
             # CLICK FISICO
-            # --------------------------------------------------------
+            # ========================================================
 
             $Rect =
                 $Element.Current.BoundingRectangle
@@ -595,12 +604,15 @@ jobs:
                     ($Rect.Height / 2)
                 )
 
+
             [Win32]::SetCursorPos(
                 $X,
                 $Y
             ) | Out-Null
 
+
             Start-Sleep -Milliseconds 250
+
 
             [Win32]::mouse_event(
                 0x0002,
@@ -609,6 +621,7 @@ jobs:
                 0,
                 [UIntPtr]::Zero
             )
+
 
             [Win32]::mouse_event(
                 0x0004,
@@ -621,14 +634,13 @@ jobs:
 
 
         # ============================================================
-        # EJECUCION
+        # INICIO DEL PROCESO
         # ============================================================
 
         try {
 
-
             # ========================================================
-            # 1 - BUSCAR CWCONFIG.EXE
+            # 1 - BUSCAR CWCONFIG
             # ========================================================
 
             Write-Host "[1] Buscando cwConfig.exe..."
@@ -661,13 +673,13 @@ jobs:
 
 
             # ========================================================
-            # BUSQUEDA ALTERNATIVA
+            # BUSQUEDA DINAMICA
             # ========================================================
 
             if (-not $ConfigExe) {
 
                 Write-Host "[INFO] No se encontro en las rutas estandar."
-                Write-Host "[INFO] Buscando dentro de Softland..."
+                Write-Host "[INFO] Buscando cwConfig.exe dentro de Softland..."
 
 
                 $SearchRoots = @(
@@ -706,7 +718,7 @@ jobs:
 
             if (-not $ConfigExe) {
 
-                throw "No se encontro cwConfig.exe."
+                throw "No se encontro cwConfig.exe en este servidor."
             }
 
 
@@ -734,7 +746,7 @@ jobs:
 
 
             # ========================================================
-            # DETECTAR VENTANA
+            # BUSCAR VENTANA PRINCIPAL
             # ========================================================
 
             $MainWindow =
@@ -772,11 +784,8 @@ jobs:
 
 
                         if (
-                            $Title -like
-                            "*configuracion del sistema de gestion*" -or
-
-                            $Title -like
-                            "*configuracion de softland*"
+                            $Title -like "*configuracion del sistema de gestion*" -or
+                            $Title -like "*configuracion de softland*"
                         ) {
 
                             $MainWindow =
@@ -842,15 +851,14 @@ jobs:
                     -Name "Operaciones"
 
 
-            # --------------------------------------------------------
-            # SI NO LO ENCUENTRA EN MAINWINDOW
-            # PROBAR DESDE EL ESCRITORIO COMPLETO
-            # --------------------------------------------------------
+            # ========================================================
+            # FALLBACK DESDE TODO EL ESCRITORIO
+            # ========================================================
 
             if (-not $Operaciones) {
 
-                Write-Host "[WARN] No se encontro dentro de MainWindow."
-                Write-Host "[INFO] Buscando Operaciones desde RootElement..."
+                Write-Host "[WARN] Operaciones no se encontro dentro de MainWindow."
+                Write-Host "[INFO] Buscando desde RootElement..."
 
 
                 $Desktop =
@@ -871,7 +879,14 @@ jobs:
                     -Root $MainWindow
 
 
-                throw "No se encontro Operaciones. Revise el listado de MenuItem generado en el log."
+                Write-Host "[INFO] Realizando tambien diagnostico desde el escritorio completo..."
+
+
+                Dump-MenuItems `
+                    -Root ([System.Windows.Automation.AutomationElement]::RootElement)
+
+
+                throw "No se encontro Operaciones. Revise los controles mostrados en el log."
             }
 
 
@@ -880,9 +895,9 @@ jobs:
             Write-Host "[INFO] AutomationId : $($Operaciones.Current.AutomationId)"
             Write-Host "[INFO] Clase        : $($Operaciones.Current.ClassName)"
             Write-Host "[INFO] Tipo         : $($Operaciones.Current.ControlType.ProgrammaticName)"
-
-
             Write-Host ""
+
+
             Write-Host "[INFO] Abriendo Operaciones..."
 
 
@@ -893,7 +908,7 @@ jobs:
             Start-Sleep -Seconds 2
 
 
-            Write-Host "[OK] Click realizado sobre Operaciones."
+            Write-Host "[OK] Operaciones abierto."
 
 
             # ========================================================
@@ -951,8 +966,13 @@ jobs:
             Write-Host "[INFO] Nombre       : $($Empresas.Current.Name)"
             Write-Host "[INFO] AutomationId : $($Empresas.Current.AutomationId)"
             Write-Host "[INFO] Clase        : $($Empresas.Current.ClassName)"
+            Write-Host "[INFO] Tipo         : $($Empresas.Current.ControlType.ProgrammaticName)"
             Write-Host ""
 
+
+            # ========================================================
+            # ABRIR EMPRESAS
+            # ========================================================
 
             Write-Host "[INFO] Abriendo Empresas..."
 
@@ -964,11 +984,14 @@ jobs:
             Start-Sleep -Seconds 3
 
 
+            Write-Host "[OK] Click realizado sobre Empresas."
+            Write-Host ""
+
+
             # ========================================================
-            # 5 - LISTVIEW
+            # 5 - BUSCAR LISTVIEW
             # ========================================================
 
-            Write-Host ""
             Write-Host "[4] Buscando grilla ListView20WndClass..."
 
 
@@ -1002,6 +1025,17 @@ jobs:
 
             if (-not $ListaEmpresas) {
 
+                # Probar también desde escritorio completo
+
+                $ListaEmpresas =
+                    Get-ElementByClass `
+                        -Root ([System.Windows.Automation.AutomationElement]::RootElement) `
+                        -ClassName "ListView20WndClass"
+            }
+
+
+            if (-not $ListaEmpresas) {
+
                 throw "No se encontro la grilla ListView20WndClass."
             }
 
@@ -1017,7 +1051,7 @@ jobs:
 
 
             # ========================================================
-            # 6 - CANTIDAD
+            # 6 - CANTIDAD DE FILAS
             # ========================================================
 
             $CantidadEmpresas =
@@ -1026,21 +1060,21 @@ jobs:
                 )
 
 
-            Write-Host "[INFO] Empresas detectadas: $CantidadEmpresas"
+            Write-Host "[INFO] Empresas detectadas en la grilla: $CantidadEmpresas"
 
 
             if ($CantidadEmpresas -le 0) {
 
-                throw "La grilla no contiene empresas."
+                throw "La grilla fue detectada pero no contiene empresas."
             }
 
 
             # ========================================================
-            # 7 - MARCAR TODAS
+            # 7 - ESTADO INICIAL
             # ========================================================
 
             Write-Host ""
-            Write-Host "[5] Marcando todas las empresas..."
+            Write-Host "[5] Estado inicial..."
             Write-Host ""
 
 
@@ -1058,22 +1092,53 @@ jobs:
 
 
                 Write-Host "[INFO] Fila $($i + 1) - Estado inicial: $Estado"
+            }
 
 
-                if ($Estado -ne 2) {
+            # ========================================================
+            # 8 - MARCAR TODAS
+            # ========================================================
 
-                    $Resultado =
-                        [NativeListView]::SetChecked(
-                            $ListHandle,
-                            $i,
-                            $true
-                        )
+            Write-Host ""
+            Write-Host "[6] Marcando todas las empresas..."
+            Write-Host ""
 
 
-                    if (-not $Resultado) {
+            for (
+                $i = 0;
+                $i -lt $CantidadEmpresas;
+                $i++
+            ) {
 
-                        throw "No fue posible marcar la fila $($i + 1)."
-                    }
+                $Estado =
+                    [NativeListView]::GetCheckState(
+                        $ListHandle,
+                        $i
+                    )
+
+
+                if ($Estado -eq 2) {
+
+                    Write-Host "[OK] Fila $($i + 1) ya estaba marcada."
+
+                    continue
+                }
+
+
+                Write-Host "[INFO] Marcando fila $($i + 1)..."
+
+
+                $Resultado =
+                    [NativeListView]::SetChecked(
+                        $ListHandle,
+                        $i,
+                        $true
+                    )
+
+
+                if (-not $Resultado) {
+
+                    throw "No fue posible marcar la fila $($i + 1)."
                 }
 
 
@@ -1082,15 +1147,19 @@ jobs:
 
 
             # ========================================================
-            # 8 - VERIFICAR
+            # 9 - VERIFICACION
             # ========================================================
 
             Write-Host ""
-            Write-Host "[6] Verificando resultado..."
+            Write-Host "[7] Verificando seleccion..."
             Write-Host ""
 
 
             $Marcadas =
+                0
+
+
+            $NoMarcadas =
                 0
 
 
@@ -1115,18 +1184,26 @@ jobs:
                 }
                 else {
 
+                    $NoMarcadas++
+
                     Write-Host "[ERROR] Fila $($i + 1) NO marcada. Estado=$Estado"
                 }
             }
 
 
+            # ========================================================
+            # RESULTADO
+            # ========================================================
+
             Write-Host ""
             Write-Host "=========================================================="
-            Write-Host " RESULTADO"
+            Write-Host " RESULTADO DE LA PRUEBA"
             Write-Host "=========================================================="
             Write-Host ""
+            Write-Host "Servidor            : $env:COMPUTERNAME"
             Write-Host "Empresas detectadas : $CantidadEmpresas"
             Write-Host "Empresas marcadas   : $Marcadas"
+            Write-Host "No marcadas         : $NoMarcadas"
             Write-Host ""
 
 
@@ -1140,15 +1217,15 @@ jobs:
             Write-Host " OK - TODAS LAS EMPRESAS QUEDARON MARCADAS"
             Write-Host "=========================================================="
             Write-Host ""
-            Write-Host "[TEST] NO se presionara Convertir."
+            Write-Host "[TEST] NO se ejecuta Convertir."
             Write-Host ""
             Write-Host "[DEBUG] Config quedara abierto durante $DebugPauseMinutes minutos."
-            Write-Host "[DEBUG] Revise visualmente que todas las empresas tengan check."
+            Write-Host "[DEBUG] Revise visualmente los checks."
             Write-Host ""
 
 
             # ========================================================
-            # MANTENER CONFIG ABIERTO PARA INSPECCION
+            # MANTENER CONFIG ABIERTO
             # ========================================================
 
             if ($DebugPauseMinutes -gt 0) {
@@ -1158,10 +1235,17 @@ jobs:
             }
 
 
-            Write-Host "[OK] Prueba finalizada."
+            Write-Host ""
+            Write-Host "[OK] Prueba finalizada correctamente."
+            Write-Host ""
 
             exit 0
         }
+
+
+        # ============================================================
+        # ERROR / DEBUG
+        # ============================================================
 
         catch {
 
@@ -1201,8 +1285,8 @@ jobs:
 
 
             Write-Host ""
-            Write-Host "[DEBUG] Config quedara abierto durante $DebugPauseMinutes minutos."
-            Write-Host "[DEBUG] Puede revisar manualmente donde quedo Softland."
+            Write-Host "[DEBUG] El job permanecera activo durante $DebugPauseMinutes minutos."
+            Write-Host "[DEBUG] Puede revisar manualmente la ventana de Configuracion."
             Write-Host ""
 
 
