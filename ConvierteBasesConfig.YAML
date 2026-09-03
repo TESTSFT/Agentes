@@ -61,7 +61,7 @@ jobs:
 
 
         # ============================================================
-        # WIN32 - MENUS, DIALOGOS Y TECLADO
+        # WIN32 - MENU, DIALOGOS, TEXTBOX Y TECLADO
         # ============================================================
 
         Add-Type @"
@@ -75,13 +75,24 @@ jobs:
         {
             public const uint WM_COMMAND = 0x0111;
             public const uint WM_INITMENUPOPUP = 0x0117;
+
+            public const uint WM_KEYDOWN = 0x0100;
+            public const uint WM_KEYUP = 0x0101;
+            public const uint WM_CHAR = 0x0102;
+
+            public const uint WM_CLEAR = 0x0303;
+
+            public const uint EM_SETSEL = 0x00B1;
+
             public const uint BM_CLICK = 0x00F5;
+
             public const uint MF_BYPOSITION = 0x00000400;
 
             public const int GWL_STYLE = -16;
             public const long ES_PASSWORD = 0x0020;
 
             public const uint INPUT_KEYBOARD = 1;
+
             public const uint KEYEVENTF_KEYUP = 0x0002;
             public const uint KEYEVENTF_UNICODE = 0x0004;
 
@@ -89,10 +100,24 @@ jobs:
             public const ushort VK_A = 0x41;
             public const ushort VK_BACK = 0x08;
 
+            public const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+            public const uint MOUSEEVENTF_LEFTUP = 0x0004;
+
+
             public delegate bool EnumWindowsProc(
                 IntPtr hWnd,
                 IntPtr lParam
             );
+
+
+            [StructLayout(LayoutKind.Sequential)]
+            public struct RECT
+            {
+                public int Left;
+                public int Top;
+                public int Right;
+                public int Bottom;
+            }
 
 
             [StructLayout(LayoutKind.Sequential)]
@@ -260,6 +285,30 @@ jobs:
             );
 
 
+            [DllImport("user32.dll")]
+            public static extern bool GetWindowRect(
+                IntPtr hWnd,
+                out RECT lpRect
+            );
+
+
+            [DllImport("user32.dll")]
+            public static extern bool SetCursorPos(
+                int X,
+                int Y
+            );
+
+
+            [DllImport("user32.dll")]
+            public static extern void mouse_event(
+                uint dwFlags,
+                uint dx,
+                uint dy,
+                uint dwData,
+                UIntPtr dwExtraInfo
+            );
+
+
             [DllImport(
                 "user32.dll",
                 EntryPoint = "GetWindowLong"
@@ -297,9 +346,17 @@ jobs:
             )
             {
                 if (IntPtr.Size == 8)
-                    return GetWindowLongPtr64(hWnd, nIndex);
+                {
+                    return GetWindowLongPtr64(
+                        hWnd,
+                        nIndex
+                    );
+                }
 
-                return GetWindowLongPtr32(hWnd, nIndex);
+                return GetWindowLongPtr32(
+                    hWnd,
+                    nIndex
+                );
             }
 
 
@@ -460,14 +517,18 @@ jobs:
                     if (
                         String.IsNullOrWhiteSpace(value)
                     )
+                    {
                         continue;
+                    }
 
                     if (
                         !text.Contains(
                             value.ToLowerInvariant()
                         )
                     )
+                    {
                         return false;
+                    }
                 }
 
                 return true;
@@ -546,18 +607,39 @@ jobs:
                 string cls =
                     ClassName(hWnd);
 
-                return
+                if (
                     cls.IndexOf(
                         "ThunderRT6TextBox",
                         StringComparison.OrdinalIgnoreCase
                     ) >= 0
-                    ||
-                    cls.IndexOf(
+                )
+                {
+                    return true;
+                }
+
+                if (
+                    String.Equals(
+                        cls,
                         "Edit",
                         StringComparison.OrdinalIgnoreCase
-                    ) >= 0;
+                    )
+                )
+                {
+                    return true;
+                }
+
+                return false;
             }
 
+
+            // =======================================================
+            // IDENTIFICAR TEXTBOX DE CONTRASEÑA
+            //
+            // 1) Prioridad: estilo ES_PASSWORD
+            // 2) Fallback: TextBox ubicado mas abajo en pantalla.
+            //
+            // Esto evita escribir sobre el campo Usuario.
+            // =======================================================
 
             public static IntPtr FindPasswordTextBox(
                 IntPtr parent
@@ -572,9 +654,12 @@ jobs:
                 )
                 {
                     if (!IsTextBox(child))
+                    {
                         continue;
+                    }
 
                     textBoxes.Add(child);
+
 
                     long style =
                         GetWindowLongPtr(
@@ -582,9 +667,10 @@ jobs:
                             GWL_STYLE
                         ).ToInt64();
 
+
                     if (
-                        (style & ES_PASSWORD)
-                        == ES_PASSWORD
+                        (style & ES_PASSWORD) ==
+                        ES_PASSWORD
                     )
                     {
                         return child;
@@ -592,23 +678,99 @@ jobs:
                 }
 
 
-                // Fallback para controles VB6:
-                // Usuario = primer TextBox
-                // Contraseña = segundo TextBox
-
-                if (textBoxes.Count >= 2)
+                if (textBoxes.Count == 0)
                 {
-                    return textBoxes[1];
+                    return IntPtr.Zero;
                 }
 
 
-                if (textBoxes.Count == 1)
+                // Fallback:
+                // elegir el TextBox que esta mas abajo.
+                //
+                // En esta ventana:
+                //
+                // Usuario
+                // [sa]
+                //
+                // Contraseña
+                // [_____]
+                //
+                // El campo contraseña tiene el Top mayor.
+
+                IntPtr selected =
+                    IntPtr.Zero;
+
+                int greatestTop =
+                    Int32.MinValue;
+
+
+                foreach (
+                    IntPtr box in
+                    textBoxes
+                )
                 {
-                    return textBoxes[0];
+                    RECT rect;
+
+                    if (
+                        GetWindowRect(
+                            box,
+                            out rect
+                        )
+                    )
+                    {
+                        if (
+                            rect.Top >
+                            greatestTop
+                        )
+                        {
+                            greatestTop =
+                                rect.Top;
+
+                            selected =
+                                box;
+                        }
+                    }
                 }
 
 
-                return IntPtr.Zero;
+                if (
+                    selected !=
+                    IntPtr.Zero
+                )
+                {
+                    return selected;
+                }
+
+
+                return textBoxes[
+                    textBoxes.Count - 1
+                ];
+            }
+
+
+            public static string GetRectInfo(
+                IntPtr hWnd
+            )
+            {
+                RECT rect;
+
+                if (
+                    !GetWindowRect(
+                        hWnd,
+                        out rect
+                    )
+                )
+                {
+                    return "RECT desconocido";
+                }
+
+                return String.Format(
+                    "Left={0}, Top={1}, Right={2}, Bottom={3}",
+                    rect.Left,
+                    rect.Top,
+                    rect.Right,
+                    rect.Bottom
+                );
             }
 
 
@@ -633,82 +795,102 @@ jobs:
             }
 
 
-            static void SendVirtualKey(
-                ushort key,
-                bool keyUp
+            // =======================================================
+            // CLICK FISICO SOBRE UN CONTROL
+            // =======================================================
+
+            public static bool PhysicalClick(
+                IntPtr hWnd
             )
             {
-                INPUT input =
-                    new INPUT();
-
-                input.type =
-                    INPUT_KEYBOARD;
-
-                input.U.ki.wVk =
-                    key;
-
-                input.U.ki.wScan =
-                    0;
-
-                input.U.ki.dwFlags =
-                    keyUp
-                    ? KEYEVENTF_KEYUP
-                    : 0;
-
-                input.U.ki.time =
-                    0;
-
-                input.U.ki.dwExtraInfo =
-                    UIntPtr.Zero;
-
-                SendInput(
-                    1,
-                    new INPUT[] { input },
-                    Marshal.SizeOf(typeof(INPUT))
-                );
-            }
+                if (
+                    hWnd == IntPtr.Zero ||
+                    !IsWindow(hWnd)
+                )
+                {
+                    return false;
+                }
 
 
-            static void SendUnicodeCharacter(
-                char character,
-                bool keyUp
-            )
-            {
-                INPUT input =
-                    new INPUT();
+                RECT rect;
 
-                input.type =
-                    INPUT_KEYBOARD;
+                if (
+                    !GetWindowRect(
+                        hWnd,
+                        out rect
+                    )
+                )
+                {
+                    return false;
+                }
 
-                input.U.ki.wVk =
-                    0;
 
-                input.U.ki.wScan =
-                    character;
-
-                input.U.ki.dwFlags =
-                    KEYEVENTF_UNICODE |
+                int x =
+                    rect.Left +
                     (
-                        keyUp
-                        ? KEYEVENTF_KEYUP
-                        : 0
+                        (
+                            rect.Right -
+                            rect.Left
+                        ) / 2
                     );
 
-                input.U.ki.time =
-                    0;
 
-                input.U.ki.dwExtraInfo =
-                    UIntPtr.Zero;
+                int y =
+                    rect.Top +
+                    (
+                        (
+                            rect.Bottom -
+                            rect.Top
+                        ) / 2
+                    );
 
-                SendInput(
-                    1,
-                    new INPUT[] { input },
-                    Marshal.SizeOf(typeof(INPUT))
+
+                SetCursorPos(
+                    x,
+                    y
                 );
+
+
+                Thread.Sleep(150);
+
+
+                mouse_event(
+                    MOUSEEVENTF_LEFTDOWN,
+                    0,
+                    0,
+                    0,
+                    UIntPtr.Zero
+                );
+
+
+                mouse_event(
+                    MOUSEEVENTF_LEFTUP,
+                    0,
+                    0,
+                    0,
+                    UIntPtr.Zero
+                );
+
+
+                Thread.Sleep(200);
+
+
+                return true;
             }
 
 
-            public static bool TypeText(
+            // =======================================================
+            // METODO 1:
+            //
+            // Escribir usando WM_CHAR directamente sobre el
+            // ThunderRT6TextBox.
+            //
+            // A diferencia de WM_SETTEXT, WM_CHAR simula el ingreso
+            // caracter por caracter y VB6 puede ejecutar eventos
+            // Change / KeyPress.
+            // =======================================================
+
+            public static bool TypeTextByMessages(
                 IntPtr dialog,
                 IntPtr edit,
                 string value
@@ -724,87 +906,276 @@ jobs:
                 }
 
 
-                // Traer dialogo al frente
+                SetForegroundWindow(
+                    dialog
+                );
+
+
+                Thread.Sleep(200);
+
+
+                PhysicalClick(
+                    edit
+                );
+
+
+                Thread.Sleep(200);
+
+
+                // Seleccionar todo
+
+                SendMessage(
+                    edit,
+                    EM_SETSEL,
+                    IntPtr.Zero,
+                    new IntPtr(-1)
+                );
+
+
+                Thread.Sleep(100);
+
+
+                // Limpiar
+
+                SendMessage(
+                    edit,
+                    WM_CLEAR,
+                    IntPtr.Zero,
+                    IntPtr.Zero
+                );
+
+
+                Thread.Sleep(100);
+
+
+                foreach (
+                    char character in
+                    value.ToCharArray()
+                )
+                {
+                    SendMessage(
+                        edit,
+                        WM_CHAR,
+                        new IntPtr(
+                            (int)character
+                        ),
+                        IntPtr.Zero
+                    );
+
+
+                    Thread.Sleep(40);
+                }
+
+
+                Thread.Sleep(700);
+
+
+                return true;
+            }
+
+
+            static void SendVirtualKey(
+                ushort key,
+                bool keyUp
+            )
+            {
+                INPUT input =
+                    new INPUT();
+
+
+                input.type =
+                    INPUT_KEYBOARD;
+
+
+                input.U.ki.wVk =
+                    key;
+
+
+                input.U.ki.wScan =
+                    0;
+
+
+                input.U.ki.dwFlags =
+                    keyUp
+                    ? KEYEVENTF_KEYUP
+                    : 0;
+
+
+                input.U.ki.time =
+                    0;
+
+
+                input.U.ki.dwExtraInfo =
+                    UIntPtr.Zero;
+
+
+                SendInput(
+                    1,
+                    new INPUT[] { input },
+                    Marshal.SizeOf(
+                        typeof(INPUT)
+                    )
+                );
+            }
+
+
+            static void SendUnicodeCharacter(
+                char character,
+                bool keyUp
+            )
+            {
+                INPUT input =
+                    new INPUT();
+
+
+                input.type =
+                    INPUT_KEYBOARD;
+
+
+                input.U.ki.wVk =
+                    0;
+
+
+                input.U.ki.wScan =
+                    character;
+
+
+                input.U.ki.dwFlags =
+                    KEYEVENTF_UNICODE |
+                    (
+                        keyUp
+                        ? KEYEVENTF_KEYUP
+                        : 0
+                    );
+
+
+                input.U.ki.time =
+                    0;
+
+
+                input.U.ki.dwExtraInfo =
+                    UIntPtr.Zero;
+
+
+                SendInput(
+                    1,
+                    new INPUT[] { input },
+                    Marshal.SizeOf(
+                        typeof(INPUT)
+                    )
+                );
+            }
+
+
+            // =======================================================
+            // METODO 2 - FALLBACK
+            //
+            // Click fisico + SendInput.
+            // =======================================================
+
+            public static bool TypeTextBySendInput(
+                IntPtr dialog,
+                IntPtr edit,
+                string value
+            )
+            {
+                if (
+                    dialog == IntPtr.Zero ||
+                    edit == IntPtr.Zero ||
+                    !IsWindow(edit)
+                )
+                {
+                    return false;
+                }
+
 
                 SetForegroundWindow(
                     dialog
                 );
 
-                Thread.Sleep(200);
+
+                Thread.Sleep(250);
 
 
-                // Dar foco REAL al TextBox de contraseña
-
-                SetFocus(
+                PhysicalClick(
                     edit
                 );
 
-                Thread.Sleep(200);
+
+                Thread.Sleep(300);
 
 
-                // Ctrl+A
+                // CTRL + A
 
                 SendVirtualKey(
                     VK_CONTROL,
                     false
                 );
+
 
                 SendVirtualKey(
                     VK_A,
                     false
                 );
 
+
                 SendVirtualKey(
                     VK_A,
                     true
                 );
+
 
                 SendVirtualKey(
                     VK_CONTROL,
                     true
                 );
 
+
                 Thread.Sleep(100);
 
 
-                // Backspace para limpiar cualquier contenido
+                // BACKSPACE
 
                 SendVirtualKey(
                     VK_BACK,
                     false
                 );
 
+
                 SendVirtualKey(
                     VK_BACK,
                     true
                 );
 
+
                 Thread.Sleep(100);
 
 
-                // Escritura caracter por caracter.
-                // No requiere escapar caracteres especiales.
+                // CONTRASEÑA
 
                 foreach (
-                    char c in
+                    char character in
                     value.ToCharArray()
                 )
                 {
                     SendUnicodeCharacter(
-                        c,
+                        character,
                         false
                     );
 
+
                     SendUnicodeCharacter(
-                        c,
+                        character,
                         true
                     );
 
-                    Thread.Sleep(25);
+
+                    Thread.Sleep(40);
                 }
 
 
-                Thread.Sleep(500);
+                Thread.Sleep(700);
+
 
                 return true;
             }
@@ -813,7 +1184,8 @@ jobs:
 
 
         # ============================================================
-        # LISTVIEW NATIVO - PARTE YA VALIDADA
+        # LISTVIEW NATIVO
+        # YA VALIDADO
         # ============================================================
 
         Add-Type @"
@@ -839,6 +1211,7 @@ jobs:
             const uint MEM_RELEASE = 0x8000;
             const uint PAGE_READWRITE = 0x04;
 
+
             [DllImport("user32.dll")]
             static extern IntPtr SendMessage(
                 IntPtr hWnd,
@@ -847,20 +1220,29 @@ jobs:
                 IntPtr lParam
             );
 
+
             [DllImport("user32.dll")]
             static extern uint GetWindowThreadProcessId(
                 IntPtr hWnd,
                 out uint processId
             );
 
-            [DllImport("kernel32.dll", SetLastError = true)]
+
+            [DllImport(
+                "kernel32.dll",
+                SetLastError = true
+            )]
             static extern IntPtr OpenProcess(
                 uint processAccess,
                 bool inheritHandle,
                 uint processId
             );
 
-            [DllImport("kernel32.dll", SetLastError = true)]
+
+            [DllImport(
+                "kernel32.dll",
+                SetLastError = true
+            )]
             static extern IntPtr VirtualAllocEx(
                 IntPtr hProcess,
                 IntPtr lpAddress,
@@ -869,7 +1251,11 @@ jobs:
                 uint protect
             );
 
-            [DllImport("kernel32.dll", SetLastError = true)]
+
+            [DllImport(
+                "kernel32.dll",
+                SetLastError = true
+            )]
             static extern bool WriteProcessMemory(
                 IntPtr hProcess,
                 IntPtr lpBaseAddress,
@@ -878,13 +1264,18 @@ jobs:
                 out UIntPtr numberOfBytesWritten
             );
 
-            [DllImport("kernel32.dll", SetLastError = true)]
+
+            [DllImport(
+                "kernel32.dll",
+                SetLastError = true
+            )]
             static extern bool VirtualFreeEx(
                 IntPtr hProcess,
                 IntPtr lpAddress,
                 UIntPtr size,
                 uint freeType
             );
+
 
             [DllImport("kernel32.dll")]
             static extern bool CloseHandle(
@@ -915,11 +1306,15 @@ jobs:
                         handle,
                         LVM_GETITEMSTATE,
                         new IntPtr(index),
-                        new IntPtr(LVIS_STATEIMAGEMASK)
+                        new IntPtr(
+                            LVIS_STATEIMAGEMASK
+                        )
                     ).ToInt32();
 
+
                 return (
-                    state & 0xF000
+                    state &
+                    0xF000
                 ) >> 12;
             }
 
@@ -932,10 +1327,12 @@ jobs:
             {
                 uint processId;
 
+
                 GetWindowThreadProcessId(
                     handle,
                     out processId
                 );
+
 
                 IntPtr process =
                     OpenProcess(
@@ -946,6 +1343,7 @@ jobs:
                         false,
                         processId
                     );
+
 
                 if (
                     process ==
@@ -1327,7 +1725,7 @@ jobs:
                 )
             ) {
 
-                throw "No fue posible enviar click asincronico a $Text."
+                throw "No fue posible enviar click a $Text."
             }
 
 
@@ -1396,7 +1794,7 @@ jobs:
             param(
                 [IntPtr]$Window,
                 [string[]]$Names,
-                [int]$TimeoutSeconds = 15
+                [int]$TimeoutSeconds = 8
             )
 
             $End =
@@ -1440,7 +1838,7 @@ jobs:
 
 
         # ============================================================
-        # NUEVA FUNCION PASSWORD
+        # PASSWORD
         # ============================================================
 
         function Set-Password {
@@ -1462,7 +1860,7 @@ jobs:
                 [IntPtr]::Zero
             ) {
 
-                Write-Host "[ERROR] No se encontro el TextBox de contraseña."
+                Write-Host "[ERROR] No se encontro el campo de contraseña."
 
                 return $false
             }
@@ -1471,12 +1869,20 @@ jobs:
             Write-Host "[OK] TextBox de contraseña identificado."
             Write-Host "[INFO] Clase : $([NativeUI]::ClassName($PasswordEdit))"
             Write-Host "[INFO] Handle: $PasswordEdit"
-            Write-Host "[INFO] Se escribira la contraseña mediante teclado real."
-            Write-Host "[INFO] El contenido NO se mostrara en el log."
+            Write-Host "[INFO] Posicion: $([NativeUI]::GetRectInfo($PasswordEdit))"
+            Write-Host "[INFO] La contraseña NO se mostrara en el log."
+            Write-Host ""
+
+
+            # ========================================================
+            # INTENTO 1 - WM_CHAR
+            # ========================================================
+
+            Write-Host "[INFO] Intento 1: escribiendo mediante WM_CHAR..."
 
 
             $Result =
-                [NativeUI]::TypeText(
+                [NativeUI]::TypeTextByMessages(
                     $Dialog,
                     $PasswordEdit,
                     $Value
@@ -1485,11 +1891,65 @@ jobs:
 
             if (-not $Result) {
 
+                Write-Host "[WARN] No fue posible usar WM_CHAR."
+            }
+
+
+            Start-Sleep -Milliseconds 800
+
+
+            $Aceptar =
+                Find-Button `
+                    -Window $Dialog `
+                    -Names @(
+                        "Aceptar",
+                        "OK"
+                    )
+
+
+            if (
+                $Aceptar -ne
+                [IntPtr]::Zero
+            ) {
+
+                if (
+                    [NativeUI]::IsWindowEnabled(
+                        $Aceptar
+                    )
+                ) {
+
+                    Write-Host "[OK] Aceptar se habilito con WM_CHAR."
+
+                    return $true
+                }
+            }
+
+
+            # ========================================================
+            # INTENTO 2 - SENDINPUT
+            # ========================================================
+
+            Write-Host "[WARN] Aceptar sigue deshabilitado."
+            Write-Host "[INFO] Intento 2: click fisico + SendInput..."
+
+
+            $Result2 =
+                [NativeUI]::TypeTextBySendInput(
+                    $Dialog,
+                    $PasswordEdit,
+                    $Value
+                )
+
+
+            if (-not $Result2) {
+
+                Write-Host "[ERROR] Fallo tambien SendInput."
+
                 return $false
             }
 
 
-            Start-Sleep -Milliseconds 500
+            Start-Sleep -Milliseconds 800
 
 
             return $true
@@ -1587,7 +2047,7 @@ jobs:
 
 
             # ========================================================
-            # 2 - ABRIR CWCONFIG
+            # 2 - ABRIR
             # ========================================================
 
             $Existing =
@@ -1825,7 +2285,7 @@ jobs:
 
 
             # ========================================================
-            # 5 - MARCAR EMPRESAS
+            # 5 - MARCAR TODAS
             # YA VALIDADO
             # ========================================================
 
@@ -1995,8 +2455,6 @@ jobs:
 
                 # ====================================================
                 # CONTRASEÑA
-                #
-                # ESTE ES EL PUNTO ACTUAL DE PRUEBA
                 # ====================================================
 
                 Write-Host "[INFO] Esperando Ingrese contraseña..."
@@ -2036,13 +2494,9 @@ jobs:
                 }
 
 
-                Write-Host "[OK] Escritura de contraseña enviada."
+                Write-Host ""
                 Write-Host "[INFO] Esperando que Softland habilite Aceptar..."
 
-
-                # ====================================================
-                # ACEPTAR
-                # ====================================================
 
                 $Aceptar =
                     Wait-ButtonEnabled `
@@ -2051,7 +2505,7 @@ jobs:
                             "Aceptar",
                             "OK"
                         ) `
-                        -TimeoutSeconds 15
+                        -TimeoutSeconds 12
 
 
                 if (
@@ -2059,7 +2513,7 @@ jobs:
                     [IntPtr]::Zero
                 ) {
 
-                    throw "La contraseña se escribio pero Aceptar no se habilito."
+                    throw "La contraseña se intento ingresar pero Aceptar no se habilito."
                 }
 
 
